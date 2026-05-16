@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-const GITHUB_REPO: &str = "LeagueToolkit/lmdb-hashes";
+const GITHUB_REPO: &str = "RitoShark/lmdb-hashes";
 const ASSET_NAME: &str = "lol-hashes-combined.zst";
 const VERSION_FILE: &str = "version.txt";
 
@@ -227,6 +227,24 @@ pub fn ensure_hashes_available(force_check: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Best-effort wipe of the on-disk LMDB cache. Called when the
+/// adapter can't make sense of either the current or the legacy
+/// schema — the next run then redownloads cleanly instead of
+/// failing the same way forever. Silently ignores any I/O error
+/// because losing the cache is never worse than keeping a broken
+/// one.
+pub fn invalidate_cache() {
+    let Ok(dir) = get_lmdb_path() else { return };
+    if dir.exists() {
+        let _ = std::fs::remove_dir_all(&dir);
+        tracing::info!(
+            "Invalidated LMDB cache at {} — will redownload on next run.",
+            dir.display()
+        );
+    }
+    let _ = get_version_path().map(std::fs::remove_file);
 }
 
 /// Force check for updates and download if available.

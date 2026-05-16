@@ -54,6 +54,10 @@ fn load_hash_provider() -> Result<Arc<dyn HashProvider>> {
         }
         Err(e) => {
             tracing::warn!("LMDB hash provider unavailable: {}", e);
+            // Cache contents we can't parse are worse than no cache —
+            // wipe so the next run downloads a fresh bundle from the
+            // current schema instead of failing the same way forever.
+            crate::hash_downloader::invalidate_cache();
             tracing::info!("Falling back to TXT hash provider");
         }
     }
