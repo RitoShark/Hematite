@@ -219,7 +219,18 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
     let champion_list = remote::load_champion_list();
     let champions = CharacterRelations::from_champion_list(&champion_list);
 
-    if !cli.json {
+    // Live progress UI — only renders in Normal verbosity. We
+    // decide it BEFORE the session banner so the banner can be
+    // suppressed in Live mode (the splash + per-fix ticks already
+    // cover what it would have shown).
+    let ui_mode = ui::Mode::from_args(&cli.verbosity, cli.json);
+    let ui = ui::UiReporter::new(ui_mode);
+
+    // The old cyan "Hematite — Skin Fixer" box duplicates the splash
+    // banner and the per-fix UI, so it's only useful in Silent UI
+    // mode (verbose / trace / quiet without the bar). JSON mode
+    // suppresses it entirely.
+    if !cli.json && ui_mode == ui::Mode::Silent {
         logging::log_session_start(&input.to_string_lossy(), &selected_fixes);
     }
 
@@ -256,12 +267,6 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             None
         }
     };
-
-    // Live progress UI — only renders in Normal verbosity (verbose /
-    // trace flows surface info through tracing, json / quiet flows
-    // need stderr clean for piping).
-    let ui_mode = ui::Mode::from_args(&cli.verbosity, cli.json);
-    let ui = ui::UiReporter::new(ui_mode);
 
     let result = process::process_input(
         input,

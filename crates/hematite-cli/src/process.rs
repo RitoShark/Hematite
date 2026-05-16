@@ -39,7 +39,11 @@ struct ProcessContext<'a> {
 }
 
 /// Load hash provider with LMDB fallback to TXT.
-fn load_hash_provider() -> Result<Arc<dyn HashProvider>> {
+///
+/// Takes the UI reporter so user-visible status (cache redownload,
+/// fallback warnings) can be surfaced via the progress bar instead of
+/// raw tracing emits that visually collide with the spinner line.
+fn load_hash_provider(ui: &crate::ui::UiReporter) -> Result<Arc<dyn HashProvider>> {
     // Auto-download LMDB if missing (skip version check if already exists)
     if let Err(e) = crate::hash_downloader::ensure_hashes_available(false) {
         tracing::warn!("Failed to auto-download hash database: {}", e);
@@ -54,11 +58,40 @@ fn load_hash_provider() -> Result<Arc<dyn HashProvider>> {
         }
         Err(e) => {
             tracing::warn!("LMDB hash provider unavailable: {}", e);
-            // Cache contents we can't parse are worse than no cache —
-            // wipe so the next run downloads a fresh bundle from the
-            // current schema instead of failing the same way forever.
+            // Cache contents we can't parse are worse than no cache.
+            // Wipe and re-attempt the download in-process so this run
+            // gets WAD lookups instead of silently degrading to slow
+            // TXT for the rest of the session.
             crate::hash_downloader::invalidate_cache();
-            tracing::info!("Falling back to TXT hash provider");
+            ui.note("Hash cache was stale — re-downloading the bundle…");
+            tracing::info!("Re-downloading fresh hash bundle…");
+            match crate::hash_downloader::ensure_hashes_available(true) {
+                Ok(()) => match LmdbHashProvider::load_from_appdata() {
+                    Ok(provider) => {
+                        ui.fix_applied("Hash cache refreshed", None);
+                        tracing::info!("Using LMDB hash provider (redownloaded)");
+                        return Ok(Arc::new(provider));
+                    }
+                    Err(e2) => {
+                        ui.note(&format!(
+                            "Still no usable LMDB after redownload — falling back to slow TXT path ({e2})"
+                        ));
+                        tracing::warn!(
+                            "LMDB still unavailable after redownload: {} — falling back to TXT",
+                            e2
+                        );
+                    }
+                },
+                Err(e2) => {
+                    ui.note(&format!(
+                        "Hash redownload failed ({e2}) — falling back to slow TXT path"
+                    ));
+                    tracing::warn!(
+                        "Failed to redownload hash bundle: {} — falling back to TXT",
+                        e2
+                    );
+                }
+            }
         }
     }
 
@@ -87,9 +120,12 @@ pub fn process_input(
 ) -> Result<ProcessResult> {
     // Load hash provider once for all files. The bar shows a stage
     // label so the user sees something happen during the (slow) LMDB
-    // load on first run.
+    // load on first run; the reporter is also passed in so the
+    // loader can surface its own status (cache redownload etc.) via
+    // the same channel instead of raw tracing emits that visually
+    // collide with the spinner.
     ui.stage("Loading hash dictionary…");
-    let hash_provider = load_hash_provider()?;
+    let hash_provider = load_hash_provider(&ui)?;
 
     let ctx = ProcessContext {
         config,
@@ -551,7 +587,11 @@ fn process_wad_file(
                 parsed_bins.insert(path.clone(), tree);
             }
             Err(e) => {
-                tracing::warn!("Failed to parse BIN {path}: {e}");
+                // Not actionable for end users — a malformed BIN
+                // inside the mod usually means a custom container
+                // type the LTK parser doesn't recognise yet. Demote
+                // to debug so it doesn't muddy the Normal-mode UI.
+                tracing::debug!("Failed to parse BIN {path}: {e}");
             }
         }
     }
@@ -764,7 +804,10 @@ fn process_wad_file(
                 let mut tree = match bin_provider.parse_bytes(bytes) {
                     Ok(t) => t,
                     Err(e) => {
-                        tracing::warn!("Skipping BIN at {}: parse failed: {}", path, e);
+                        // Same reasoning as the upstream BIN-parse
+                        // warning: not actionable for end users,
+                        // suppress in Normal mode but keep under -v.
+                        tracing::debug!("Skipping BIN at {}: parse failed: {}", path, e);
                         continue;
                     }
                 };
@@ -951,10 +994,19 @@ fn process_wad_file(
             hematite_ltk::wad_builder::build_wad(&all_files, &shared_files_to_remove, &mut output_file)
                 .context("Failed to build output WAD")?;
 
-        ui.fix_applied(
-            &format!("Wrote {}", output_path.display()),
-            None,
-        );
+        // Only surface the WAD path to the UI when it's the real
+        // user-visible output. WAD writes inside a temp dir are
+        // intermediate steps of the fantome repack flow — printing
+        // them would tell the user to look at a path that gets
+        // wiped seconds later. The fantome repack itself reports
+        // the actual final path via ui.fix_applied.
+        let is_intermediate = output_path.starts_with(std::env::temp_dir());
+        if !is_intermediate {
+            ui.fix_applied(
+                &format!("Wrote {}", output_path.display()),
+                None,
+            );
+        }
         tracing::info!("✓ Wrote fixed WAD to: {}", output_path.display());
         tracing::info!(
             "  {} chunks included, {} files removed",
@@ -1128,9 +1180,14 @@ fn process_fantome_file(
 
         zip_writer.finish()?;
 
+        ctx.ui.fix_applied(
+            &format!("Wrote {}", output_path.display()),
+            None,
+        );
         tracing::info!("✓ Wrote fixed fantome to: {}", output_path.display());
         tracing::info!("  {} total fixes applied", total_result.fixes_applied);
     } else if !dry_run {
+        ctx.ui.note("No changes detected — fantome not modified.");
         tracing::info!("No changes detected - fantome not modified");
     }
 
