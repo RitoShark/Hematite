@@ -2,34 +2,41 @@
 //! interactive / drag-drop mode.
 //!
 //! Uses ANSI 256-colour escapes via the `colored` crate (already a CLI
-//! dep). Windows callers go through `colored::control::set_virtual_terminal`
-//! in [`crate::logging`] so the escapes render correctly on cmd.exe.
+//! dep). Windows ANSI virtual-terminal mode is flipped on in
+//! [`crate::main`] before any output, so the escapes render correctly
+//! on cmd.exe / Windows Terminal.
 
 use colored::Colorize;
 
-/// Block-letter "HEMATITE" — generated once, embedded verbatim. Width
-/// is 65 chars so it fits in an 80-col terminal with margin to spare.
-const BANNER: &str = r#"
- ██╗  ██╗███████╗███╗   ███╗ █████╗ ████████╗██╗████████╗███████╗
- ██║  ██║██╔════╝████╗ ████║██╔══██╗╚══██╔══╝██║╚══██╔══╝██╔════╝
- ███████║█████╗  ██╔████╔██║███████║   ██║   ██║   ██║   █████╗
- ██╔══██║██╔══╝  ██║╚██╔╝██║██╔══██║   ██║   ██║   ██║   ██╔══╝
- ██║  ██║███████╗██║ ╚═╝ ██║██║  ██║   ██║   ██║   ██║   ███████╗
- ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝   ╚═╝   ╚══════╝
-"#;
+/// Block-letter "HEMATITE" — generated once, embedded verbatim.
+///
+/// Rows kept as separate `&str`s and joined with explicit `\n` so the
+/// banner is invariant against editor / formatter trailing-whitespace
+/// stripping. Each row is the same printable width — the trailing
+/// double-space on rows 3 and 4 fills out the last `E` so the banner
+/// is a clean rectangle.
+const BANNER_ROWS: &[&str] = &[
+    " ██╗  ██╗███████╗███╗   ███╗ █████╗ ████████╗██╗████████╗███████╗",
+    " ██║  ██║██╔════╝████╗ ████║██╔══██╗╚══██╔══╝██║╚══██╔══╝██╔════╝",
+    " ███████║█████╗  ██╔████╔██║███████║   ██║   ██║   ██║   █████╗  ",
+    " ██╔══██║██╔══╝  ██║╚██╔╝██║██╔══██║   ██║   ██║   ██║   ██╔══╝  ",
+    " ██║  ██║███████╗██║ ╚═╝ ██║██║  ██║   ██║   ██║   ██║   ███████╗",
+    " ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝   ╚═╝   ╚══════╝",
+];
 
 const TAGLINE: &str = "League of Legends custom-skin fixer";
 
 /// Print the splash to stderr (so it doesn't pollute JSON / piped stdout).
 pub fn print() {
-    // Red on dark — matches the hematite/iron-ore colour scheme used in
-    // the README banner.
-    eprintln!("{}", BANNER.bright_red().bold());
+    eprintln!();
+    for row in BANNER_ROWS {
+        eprintln!("{}", row.bright_red().bold());
+    }
+    eprintln!();
     eprintln!(
         "  {}    {}",
         TAGLINE.bright_white(),
-        format!("v{}", env!("CARGO_PKG_VERSION"))
-            .bright_black()
+        format!("v{}", env!("CARGO_PKG_VERSION")).bright_black()
     );
     eprintln!(
         "  {} {}",

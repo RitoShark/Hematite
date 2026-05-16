@@ -34,8 +34,25 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 fn main() {
+    // Enable Windows ANSI virtual-terminal processing before ANY output
+    // hits stderr. The banner / interactive menu / drag-drop banner all
+    // print BEFORE `logging::init` runs, so they'd otherwise dump raw
+    // ESC[...m sequences on cmd.exe. Idempotent + no-op elsewhere.
+    #[cfg(windows)]
+    let _ = colored::control::set_virtual_terminal(true);
+
     let raw: Vec<String> = std::env::args().collect();
     let mode = detect_entry_mode(&raw);
+
+    // Interactive + drag-drop modes are user-facing by definition —
+    // the human is sitting at a terminal looking at the output, so
+    // force colours on regardless of TTY auto-detection. (Auto-detect
+    // can wrongly disable colours under certain terminal-emulator /
+    // pipe configurations.) Flag-driven mode keeps auto-detect so
+    // `--json` and piped scripts stay clean.
+    if matches!(mode, EntryMode::Interactive | EntryMode::DragDrop(_)) {
+        colored::control::set_override(true);
+    }
 
     let result = match mode {
         EntryMode::Interactive => {
