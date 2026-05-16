@@ -51,19 +51,30 @@ pub fn init(verbosity: &Verbosity, json_mode: bool) {
                 .expect("BUG: hardcoded directive is invalid"),
         );
 
-    if json_mode {
+    // `try_init` instead of `init` — the interactive menu re-enters
+    // `run_with_cli` for every "do another?" loop iteration, and
+    // `init` panics on the second call because the global subscriber
+    // is already set. The first call installs the subscriber, every
+    // subsequent call no-ops with an Err we intentionally drop.
+    let result = if json_mode {
         // JSON output for automation
         tracing_subscriber::fmt()
             .json()
             .with_env_filter(filter)
-            .init();
+            .try_init()
     } else {
         // Human-readable colored output
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_target(false)
             .with_level(true)
-            .init();
+            .try_init()
+    };
+    if let Err(e) = result {
+        // Already-set is expected on re-entry; log at debug so it
+        // doesn't muddy a clean run. Anything else is a real config
+        // bug worth surfacing.
+        tracing::debug!("tracing subscriber already initialised: {}", e);
     }
 }
 
