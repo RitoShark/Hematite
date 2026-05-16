@@ -1,77 +1,214 @@
-//! Mod asset repathing.
+//! Mod asset repathing — Topaz `FixPath` semantics, with extras for the
+//! cases Topaz misses (binless mods, custom-hashed WAD entries).
 //!
-//! Inserts a short prefix after the first "/" of every asset path referenced
-//! inside BIN files and renames the corresponding WAD entries to match.
+//! ## What runs
+//! 1. [`repath_path`] — the canonical path transform. Topaz-faithful.
+//! 2. [`repath_bin_strings`] — walk every string in a BIN and rewrite the
+//!    ones that point at files actually present in the mod (or extension
+//!    alternates: `.dds` ↔ `.tex`, `.sco` ↔ `.scb`). Returns the new paths
+//!    so the WAD step can re-hash entries to match.
+//! 3. [`repath_wad_path`] — compute the new WAD path for any non-root file.
+//!    Unlike older versions of this module, **linked BINs are repathed
+//!    too** — the only BIN the engine resolves by hard-coded path is the
+//!    "root" character / skin BIN (see [`is_root_skin_bin`]).
+//! 4. [`missing_invis_placeholders`] — opt-in injection of invisible
+//!    placeholder textures for repathed texture refs that have no real file.
 //!
-//! ## Why
-//! League stores assets by xxhash64 of their lowercase path.  A mod that
-//! ships `assets/characters/aatrox/skins/skin0/texture.dds` will silently
-//! overwrite the base-game file with the same hash.  Repathing turns that
-//! into `assets/bum/characters/aatrox/…`, giving it a distinct hash while
-//! keeping the BIN → file relationship intact.
+//! ## Path layout
+//! Topaz's `FixPath_local` is the reference. With the default
+//! [`RepathLayout::InFolder`] the prefix is concatenated to the **second**
+//! segment with no slash, and the root segment is upper-cased:
 //!
-//! ## Pipeline (called from `hematite-cli::process`)
-//! 1. [`repath_bin_strings`] — walk every string value in each BIN tree and
-//!    insert the prefix.  Returns a [`RepathBinResult`] with the count of
-//!    changes and all new paths (for placeholder injection).
-//! 2. [`repath_wad_path`] — compute the new WAD path for each non-BIN file.
-//! 3. [`missing_invis_placeholders`] — (optional) build a list of invisible
-//!    1×1 placeholder files for every texture path that has no matching WAD
-//!    entry after repathing.
+//! ```text
+//!   data/characters/yone/skins/skin0.bin
+//! → DATA/.yone1_characters/yone/skins/skin0.bin
+//! ```
+//!
+//! The alternative [`RepathLayout::Nested`] (LtMAO bumpath) inserts the
+//! prefix as its own folder and keeps the original casing:
+//!
+//! ```text
+//!   data/characters/yone/skins/skin0.bin
+//! → data/.yone1_/characters/yone/skins/skin0.bin
+//! ```
 
 use crate::walk::{walk_tree, PropertyVisitor, VisitResult};
 use hematite_types::bin::BinTree;
 use hematite_types::hash::FieldHash;
-use std::collections::HashSet;
+use hematite_types::repath::{RepathLayout, RepathOptions};
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Embedded placeholder texture
 // ---------------------------------------------------------------------------
 
-/// Bytes of an invisible 1×1 TEX texture used as a placeholder for missing assets.
+/// Bytes of an invisible 1×1 TEX texture used as a placeholder.
 pub const INVIS_TEX: &[u8] = include_bytes!("assets/invis.tex");
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Path prefixes that mark asset references we should repath.
-const ASSET_PREFIXES: &[&str] = &["assets/", "data/"];
+/// Roots that mark a path as a League asset reference. Anything else is
+/// left alone.
+const ASSET_ROOTS: &[&str] = &["assets/", "data/"];
 
 /// VO path fragment — never repath voice-over audio.
-const VO_PATH: &str = "assets/sounds/wwise2016/vo/";
+const VO_PATH: &str = "/wwise2016/vo/";
 
-/// Texture extensions that trigger invisible placeholder injection.
-/// Both `.dds` and `.tex` references are placeholded — always as `.tex`
-/// since that is the native League format.
+/// Texture extensions that trigger invisible placeholder injection. Both
+/// `.dds` and `.tex` references are placeholded as `.tex` since that is
+/// the format the engine actually loads.
 const TEXTURE_EXTS: &[&str] = &["dds", "tex"];
 
-// ---------------------------------------------------------------------------
-// Path helpers
-// ---------------------------------------------------------------------------
+/// Asset extensions used to recognise "modder-root" paths that don't carry
+/// the canonical `assets/` / `data/` prefix — e.g. `reddivinekinggaren/foo.dds`,
+/// where the modder uses their handle as a namespace. Only files ending with
+/// one of these extensions count as asset references and get the prefix
+/// prepended as a new top segment (mirrors Celestial's `ROOT_ASSET_EXTS`).
+const MODDER_ROOT_EXTS: &[&str] = &[
+    ".dds", ".tex", ".skn", ".skl", ".anm", ".bin", ".bnk", ".wpk", ".wem",
+    ".scb", ".sco", ".scn", ".troybin", ".luaobj", ".lua", ".dat", ".png",
+    ".jpg", ".webp", ".mapgeo",
+];
 
-/// Insert `prefix` after the first "/" in `path`.
-///
-/// ```
-/// use hematite_core::repath::insert_prefix;
-/// assert_eq!(
-///     insert_prefix("assets/characters/aatrox/texture.dds", "bum"),
-///     "assets/bum/characters/aatrox/texture.dds"
-/// );
-/// assert_eq!(insert_prefix("texture.dds", "bum"), "bum/texture.dds");
-/// ```
-pub fn insert_prefix(path: &str, prefix: &str) -> String {
-    match path.find('/') {
-        Some(pos) => format!("{}/{}/{}", &path[..pos], prefix, &path[pos + 1..]),
-        None => format!("{}/{}", prefix, path),
+/// `true` if a lowercased path looks like a modder-root reference: contains
+/// a slash and ends with a known asset extension, but lacks the canonical
+/// `assets/` / `data/` prefix. Kept tight on purpose — arbitrary string
+/// properties (names, hashes, plain text) must not be misclassified as
+/// asset paths.
+fn is_modder_root_path(lower: &str) -> bool {
+    if !lower.contains('/') {
+        return false;
     }
+    if ASSET_ROOTS.iter().any(|r| lower.starts_with(r)) {
+        return false;
+    }
+    MODDER_ROOT_EXTS.iter().any(|ext| lower.ends_with(ext))
 }
 
-/// Returns `true` if this string value represents an asset path that should
-/// be repathed.
+/// Magic numbers that identify League BIN files (PROP/PTCH headers).
+const BIN_MAGIC_PROP: &[u8; 4] = b"PROP";
+const BIN_MAGIC_PTCH: &[u8; 4] = b"PTCH";
+
+// ---------------------------------------------------------------------------
+// Path layout helpers
+// ---------------------------------------------------------------------------
+
+/// Returns `(root_lowercased, segments_after_root)` if `path` starts with
+/// an asset root, else `None`.
+fn split_asset_path(path: &str) -> Option<(&'static str, Vec<&str>)> {
+    let lower_head: String = path.chars().take(8).collect::<String>().to_lowercase();
+    let stripped = if lower_head.starts_with("assets/") {
+        ("assets", &path[7..])
+    } else if lower_head.starts_with("data/") {
+        ("data", &path[5..])
+    } else {
+        return None;
+    };
+    let segs: Vec<&str> = stripped.1.split('/').filter(|s| !s.is_empty()).collect();
+    Some((stripped.0, segs))
+}
+
+/// Apply the canonical repath transform to `path`.
+///
+/// Pure; identical inputs produce identical outputs. Three shapes:
+///
+/// * **Canonical Riot path** (starts with `assets/` or `data/`) — layout-aware
+///   prefix insertion (see [`RepathLayout`]).
+/// * **Modder-root path** (`reddivinekinggaren/foo.dds` style — no canonical
+///   root, but contains a slash and ends in a known asset extension) — the
+///   prefix is prepended as a new top-level segment so the modder's
+///   namespace stays intact underneath. Same transform in both layouts.
+/// * **Anything else** — returned unchanged.
+pub fn repath_path(path: &str, prefix: &str, layout: RepathLayout) -> String {
+    if let Some((root, segs)) = split_asset_path(path) {
+        if segs.is_empty() {
+            // Bare root like "assets/" — nothing to do.
+            return path.to_string();
+        }
+
+        return match layout {
+            RepathLayout::InFolder => {
+                // Topaz: ROOT/{prefix}{segs[0]}/{segs[1..]}
+                let root_up = match root {
+                    "assets" => "ASSETS",
+                    "data" => "DATA",
+                    _ => root,
+                };
+                let head = format!("{}{}", prefix, segs[0]);
+                if segs.len() == 1 {
+                    format!("{}/{}", root_up, head)
+                } else {
+                    format!("{}/{}/{}", root_up, head, segs[1..].join("/"))
+                }
+            }
+            RepathLayout::Nested => {
+                // LtMAO: root/{prefix}/{segs[..]}
+                format!("{}/{}/{}", root, prefix, segs.join("/"))
+            }
+        };
+    }
+
+    // Modder-root path: prepend prefix as new top segment.
+    // Layout-agnostic — there's no canonical root to nest under.
+    if is_modder_root_path(&path.to_lowercase()) {
+        return format!("{}/{}", prefix, path);
+    }
+
+    path.to_string()
+}
+
+/// Inverse of [`repath_path`]: given an already-repathed string, recover
+/// the original (un-prefixed) form. Idempotent on inputs that don't carry
+/// the prefix. Both layouts and the modder-root shape are handled:
+///
+/// * **Topaz InFolder** `ASSETS/{prefix}characters/...` →
+///   `assets/characters/...` (root lower-cased, prefix-prefix stripped from
+///   the head segment).
+/// * **Nested** `assets/{prefix}/characters/...` → `assets/characters/...`.
+/// * **Modder-root** `{prefix}/<rest>` → `<rest>`.
+///
+/// Used by the game-WAD fallback resolver: given a repathed string ref,
+/// figure out the original path so we can look the bytes up in the live
+/// game WAD.
+pub fn remove_prefix(path: &str, prefix: &str) -> String {
+    if prefix.is_empty() {
+        return path.to_string();
+    }
+
+    // Try canonical layouts first (case-insensitive on the root segment).
+    if let Some(slash) = path.find('/') {
+        let (root, rest) = path.split_at(slash);
+        let rest = &rest[1..]; // drop the slash
+        let root_lower = root.to_lowercase();
+        if root_lower == "assets" || root_lower == "data" {
+            // Nested:  prefix is its own segment immediately after the root.
+            if let Some(after) = rest.strip_prefix(&format!("{}/", prefix)) {
+                return format!("{}/{}", root_lower, after);
+            }
+            // InFolder: prefix is concatenated to the head of the next segment.
+            if let Some(after) = rest.strip_prefix(prefix) {
+                return format!("{}/{}", root_lower, after);
+            }
+        }
+    }
+
+    // Modder-root: prefix is the leading segment.
+    if let Some(stripped) = path.strip_prefix(&format!("{}/", prefix)) {
+        return stripped.to_string();
+    }
+
+    path.to_string()
+}
+
+/// Returns `true` if this string value is an asset path that *could* be
+/// repathed (modulo VO skip and existence checks).
 fn is_repath_candidate(value: &str, skip_vo: bool) -> bool {
     let lower = value.to_lowercase();
-    if !ASSET_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+    let canonical = ASSET_ROOTS.iter().any(|p| lower.starts_with(p));
+    let modder_root = !canonical && is_modder_root_path(&lower);
+    if !canonical && !modder_root {
         return false;
     }
     if skip_vo && lower.contains(VO_PATH) {
@@ -81,218 +218,312 @@ fn is_repath_candidate(value: &str, skip_vo: bool) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// WAD existence check
+// Existence checks
 // ---------------------------------------------------------------------------
 
-/// Check whether `path` (or an extension alternate) exists in a WAD path set.
+/// Lowercased-path lookup keyed by both the textual path and its
+/// `xxhash64`. Used to answer "does this asset string actually point at a
+/// file the mod ships?", including the case where the mod's WAD entry
+/// has no resolved path (custom-hashed mods).
+#[derive(Default)]
+pub struct WadIndex {
+    /// Lowercased file paths that the WAD ships.
+    pub paths: HashSet<String>,
+    /// All path-hashes present in the WAD, including hex-only (unresolved) entries.
+    pub hashes: HashSet<u64>,
+}
+
+impl WadIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build from `(hash, path)` pairs (typically from `extract_all_files`).
+    pub fn from_entries<I: IntoIterator<Item = (u64, String)>>(it: I) -> Self {
+        let mut idx = Self::new();
+        for (h, p) in it {
+            idx.hashes.insert(h);
+            idx.paths.insert(p.to_lowercase());
+        }
+        idx
+    }
+
+    /// Does this asset path (or an ext-alternate) exist in the WAD?
+    ///
+    /// Checks `.dds` ↔ `.tex` and `.sco` ↔ `.scb` swaps so that a BIN
+    /// string `"foo.dds"` still matches when the mod ships `"foo.tex"`,
+    /// and vice-versa. Also matches by `xxhash64(lowercased)` so custom-
+    /// hashed entries (no resolved path) are still recognised.
+    pub fn has(&self, path: &str, hash_fn: impl Fn(&str) -> u64) -> bool {
+        let lower = path.to_lowercase();
+        if self.paths.contains(&lower) {
+            return true;
+        }
+        if self.hashes.contains(&hash_fn(&lower)) {
+            return true;
+        }
+        // Extension alternates.
+        let alt: Option<String> = if let Some(stem) = lower.strip_suffix(".dds") {
+            Some(format!("{}.tex", stem))
+        } else if let Some(stem) = lower.strip_suffix(".tex") {
+            Some(format!("{}.dds", stem))
+        } else if let Some(stem) = lower.strip_suffix(".sco") {
+            Some(format!("{}.scb", stem))
+        } else {
+            lower.strip_suffix(".scb").map(|stem| format!("{}.sco", stem))
+        };
+        if let Some(a) = alt {
+            if self.paths.contains(&a) {
+                return true;
+            }
+            if self.hashes.contains(&hash_fn(&a)) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Root-BIN detection (these must NOT be moved)
+// ---------------------------------------------------------------------------
+
+/// Returns `true` for character / skin BINs that the engine resolves at a
+/// hard-coded path. Repathing these would make the game stop loading the
+/// mod entirely.
 ///
-/// League mods commonly reference `.dds` while shipping `.tex` (or vice-versa)
-/// and `.sco` while shipping `.scb`.  We check all alternates so the BIN
-/// string still gets repathed when the actual file uses a different extension.
-///
-/// Also used by the CLI to determine which referenced files are missing from
-/// the mod and need to be pulled from the game WAD.
-pub fn file_in_wad(path: &str, wad_paths: &HashSet<String>) -> bool {
+/// Conservative pattern: matches the standard skin definition file and the
+/// champion-root data file. Anything else (linked / animation BINs) is
+/// fair game for repathing.
+pub fn is_root_skin_bin(path: &str) -> bool {
     let lower = path.to_lowercase();
-    if wad_paths.contains(&lower) {
-        return true;
+    if !lower.ends_with(".bin") {
+        return false;
     }
-    // .dds ↔ .tex
-    if let Some(stem) = lower.strip_suffix(".dds") {
-        if wad_paths.contains(&format!("{}.tex", stem)) {
+    // data/characters/{champ}/{champ}.bin
+    if let Some(rest) = lower.strip_prefix("data/characters/") {
+        let parts: Vec<&str> = rest.trim_end_matches(".bin").split('/').collect();
+        if parts.len() == 2 && parts[0] == parts[1] {
             return true;
         }
-    } else if let Some(stem) = lower.strip_suffix(".tex") {
-        if wad_paths.contains(&format!("{}.dds", stem)) {
+        // data/characters/{champ}/skins/skinNN.bin (root skin)
+        if parts.len() == 3 && parts[1] == "skins" && parts[2].starts_with("skin") {
             return true;
         }
-    }
-    // .sco ↔ .scb
-    if let Some(stem) = lower.strip_suffix(".sco") {
-        if wad_paths.contains(&format!("{}.scb", stem)) {
-            return true;
-        }
-    } else if let Some(stem) = lower.strip_suffix(".scb") {
-        if wad_paths.contains(&format!("{}.sco", stem)) {
+        // data/characters/{champ}/skins/root.bin (rare but exists)
+        if parts.len() == 3 && parts[1] == "skins" && parts[2] == "root" {
             return true;
         }
     }
     false
 }
 
+/// Detects a League BIN file purely by content magic. Used so we can repath
+/// strings inside BINs whose path hashes weren't in the dictionary.
+pub fn looks_like_bin(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && (&bytes[..4] == BIN_MAGIC_PROP || &bytes[..4] == BIN_MAGIC_PTCH)
+}
+
 // ---------------------------------------------------------------------------
 // BIN asset path collection (read-only)
 // ---------------------------------------------------------------------------
 
-/// Collect all asset-path strings from a BIN tree without modifying it.
-///
-/// Returns lowercased paths that match [`ASSET_PREFIXES`] (and optionally
-/// excluding VO paths).  Used to discover which files BINs reference so the
-/// caller can pull missing ones from a game WAD before repathing.
+/// Collect every asset-path string referenced inside a BIN tree. Used by
+/// the `--game-wad` flow to figure out which game files need to be pulled.
 pub fn collect_bin_asset_paths(tree: &BinTree, skip_vo: bool) -> Vec<String> {
-    struct CollectVisitor {
+    struct Collector {
         skip_vo: bool,
         paths: Vec<String>,
     }
-
-    impl PropertyVisitor for CollectVisitor {
-        fn visit_string(&mut self, value: &str, _field_hash: FieldHash) -> VisitResult {
+    impl PropertyVisitor for Collector {
+        fn visit_string(&mut self, value: &str, _f: FieldHash) -> VisitResult {
             if is_repath_candidate(value, self.skip_vo) {
                 self.paths.push(value.to_lowercase());
             }
             VisitResult::Skip
         }
     }
-
-    let mut visitor = CollectVisitor {
+    let mut v = Collector {
         skip_vo,
         paths: Vec::new(),
     };
-
-    let mut tree_clone = tree.clone();
-    walk_tree(&mut tree_clone, &mut visitor);
-    visitor.paths
+    let mut clone = tree.clone();
+    walk_tree(&mut clone, &mut v);
+    // Also surface linked-BIN paths as references — the consumer usually
+    // wants those too.
+    for link in &tree.linked {
+        if is_repath_candidate(link, skip_vo) {
+            v.paths.push(link.to_lowercase());
+        }
+    }
+    v.paths
 }
 
 // ---------------------------------------------------------------------------
 // BIN repathing
 // ---------------------------------------------------------------------------
 
-/// Result of repathing a single BIN tree.
+/// Outcome of [`repath_bin_strings`].
 pub struct RepathBinResult {
-    /// Number of string values modified.
+    /// Number of strings rewritten (asset strings + linked deps).
     pub strings_repathed: u32,
-    /// All new (repathed) asset paths found in the tree.
-    /// Used downstream to detect missing files for invis injection.
-    pub new_paths: Vec<String>,
+    /// Map of `original_lower` → `new` for every rewritten path. Used so
+    /// the WAD step can rename / re-hash entries by their original path.
+    pub mapping: HashMap<String, String>,
 }
 
-/// Repath all asset string references in a BIN tree and collect the new paths.
+/// Rewrite asset references inside a single BIN tree.
 ///
-/// Only repaths strings whose file actually exists in `wad_paths` (the set of
-/// lowercased WAD entry paths in the mod).  Strings referencing base-game
-/// assets that the mod doesn't ship are left untouched — repathing them would
-/// create broken references since the repathed file doesn't exist.
-///
-/// Also checks `.dds` ↔ `.tex` and `.sco` ↔ `.scb` alternates so that a BIN
-/// string `"foo.dds"` is still repathed when the WAD ships `"foo.tex"`.
-///
-/// Modifies `tree` in-place.  Returns [`RepathBinResult`] with the change
-/// count and the set of repathed paths (already lowercased for hash lookups).
+/// * Walks string properties via [`walk_tree`] and the dedicated `tree.linked`
+///   list (which the walker doesn't traverse).
+/// * Repaths only strings that point at files actually present in `index`
+///   (or an extension alternate, or a custom hash). Strings referencing
+///   base-game-only assets are left untouched: repathing them would break
+///   the reference because the new path would have no file.
+/// * Records the original→new mapping so the caller can rename WAD entries.
 pub fn repath_bin_strings(
     tree: &mut BinTree,
-    prefix: &str,
-    skip_vo: bool,
-    wad_paths: &HashSet<String>,
+    opts: &RepathOptions,
+    index: &WadIndex,
+    hash_fn: impl Fn(&str) -> u64 + Copy,
 ) -> RepathBinResult {
-    struct RepathVisitor<'a> {
+    struct Repather<'a, F: Fn(&str) -> u64 + Copy> {
         prefix: &'a str,
+        layout: RepathLayout,
         skip_vo: bool,
-        wad_paths: &'a HashSet<String>,
-        new_paths: Vec<String>,
+        index: &'a WadIndex,
+        hash_fn: F,
+        mapping: HashMap<String, String>,
     }
 
-    impl<'a> PropertyVisitor for RepathVisitor<'a> {
-        fn visit_string(&mut self, value: &str, _field_hash: FieldHash) -> VisitResult {
+    impl<'a, F: Fn(&str) -> u64 + Copy> PropertyVisitor for Repather<'a, F> {
+        fn visit_string(&mut self, value: &str, _f: FieldHash) -> VisitResult {
             if !is_repath_candidate(value, self.skip_vo) {
                 return VisitResult::Skip;
             }
-            // Only repath if the file (or an extension alternate) exists in the mod WAD.
-            if !file_in_wad(value, self.wad_paths) {
+            if !self.index.has(value, self.hash_fn) {
                 return VisitResult::Skip;
             }
-            let new_path = insert_prefix(value, self.prefix);
-            self.new_paths.push(new_path.to_lowercase());
+            let new_path = repath_path(value, self.prefix, self.layout);
+            if new_path == value {
+                return VisitResult::Skip;
+            }
+            self.mapping
+                .entry(value.to_lowercase())
+                .or_insert_with(|| new_path.clone());
             VisitResult::Mutate(new_path)
         }
     }
 
-    let mut visitor = RepathVisitor {
-        prefix,
-        skip_vo,
-        wad_paths,
-        new_paths: Vec::new(),
+    let mut visitor = Repather {
+        prefix: &opts.prefix,
+        layout: opts.layout,
+        skip_vo: opts.skip_vo,
+        index,
+        hash_fn,
+        mapping: HashMap::new(),
     };
 
-    let strings_repathed = walk_tree(tree, &mut visitor);
+    let mut count = walk_tree(tree, &mut visitor);
+
+    // Repath linked dependencies too (the walker doesn't visit them).
+    for link in tree.linked.iter_mut() {
+        if !is_repath_candidate(link, opts.skip_vo) {
+            continue;
+        }
+        // Linked deps point at .bin files. Skip root skins — they stay put.
+        if is_root_skin_bin(link) {
+            continue;
+        }
+        if !index.has(link, hash_fn) {
+            continue;
+        }
+        let new_path = repath_path(link, &opts.prefix, opts.layout);
+        if new_path == *link {
+            continue;
+        }
+        visitor
+            .mapping
+            .entry(link.to_lowercase())
+            .or_insert_with(|| new_path.clone());
+        *link = new_path;
+        count += 1;
+    }
 
     RepathBinResult {
-        strings_repathed,
-        new_paths: visitor.new_paths,
+        strings_repathed: count,
+        mapping: visitor.mapping,
     }
 }
 
 // ---------------------------------------------------------------------------
-// WAD file repathing
+// WAD entry repathing
 // ---------------------------------------------------------------------------
 
-/// Compute the repathed WAD path for a file entry.
+/// Compute the new WAD path for an entry, or `None` if the entry should
+/// keep its original path.
 ///
-/// BIN files are **not** repathed in the WAD — their content has already been
-/// updated by [`repath_bin_strings`] and they must remain at their original
-/// game-known paths so the engine can resolve them.
-///
-/// Returns `None` if the file should keep its original path.
-pub fn repath_wad_path(path: &str, prefix: &str) -> Option<String> {
+/// **Root skin BINs are NEVER repathed** — the engine references them by
+/// hard-coded path. Linked / animation / data BINs *are* repathed so the
+/// repathed string references inside other BINs still resolve.
+/// Modder-root entries (`<handle>/file.ext`) are repathed too — their
+/// prefix gets prepended as a new top segment so the entry hash matches
+/// what `repath_path` produces for BIN string refs to that file.
+pub fn repath_wad_path(path: &str, prefix: &str, layout: RepathLayout) -> Option<String> {
     let lower = path.to_lowercase();
-    // BINs stay at original paths
-    if lower.ends_with(".bin") {
+    let canonical = ASSET_ROOTS.iter().any(|p| lower.starts_with(p));
+    let modder_root = !canonical && is_modder_root_path(&lower);
+    if !canonical && !modder_root {
+        // Custom hex hashes, plain VO entries, etc. — leave alone.
         return None;
     }
-    // Only repath known asset paths
-    if !ASSET_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+    // Root skin / champion BINs are loaded by the engine at fixed paths.
+    if canonical && is_root_skin_bin(&lower) {
         return None;
     }
-    Some(insert_prefix(path, prefix))
+    let new = repath_path(path, prefix, layout);
+    if new == path {
+        None
+    } else {
+        Some(new)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Invisible placeholder injection
 // ---------------------------------------------------------------------------
 
-/// Build a list of `(path, bytes)` placeholder entries for every texture path
-/// that is referenced by BIN files but absent from the WAD after repathing.
+/// Build a list of `(path, bytes)` placeholder entries for every texture
+/// path referenced by BIN files but absent from the WAD after repathing.
 ///
 /// Both `.dds` and `.tex` references are normalised to `.tex` (the native
-/// League format) and filled with [`INVIS_TEX`] bytes.  Other extensions are
-/// skipped entirely.
-///
-/// The returned paths are lowercased so the WAD builder hashes them correctly
-/// with `xxhash64(path.to_lowercase())`.
+/// League format) and filled with [`INVIS_TEX`].
 pub fn missing_invis_placeholders(
     existing_paths: &HashSet<String>,
     referenced_paths: &[String],
 ) -> Vec<(String, Vec<u8>)> {
     let mut result = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
 
-    for path in referenced_paths {
-        // paths are already lowercased from RepathBinResult
-        let is_texture = TEXTURE_EXTS
-            .iter()
-            .any(|ext| path.ends_with(&format!(".{}", ext)));
-        if !is_texture {
+    for raw in referenced_paths {
+        let path = raw.to_lowercase();
+        let is_tex = TEXTURE_EXTS.iter().any(|ext| path.ends_with(&format!(".{}", ext)));
+        if !is_tex {
             continue;
         }
-
-        // Normalise to .tex — League's native texture format
-        let tex_path = if path.ends_with(".dds") {
-            format!("{}.tex", &path[..path.len() - 4])
+        let tex_path = if let Some(stem) = path.strip_suffix(".dds") {
+            format!("{}.tex", stem)
         } else {
-            path.clone()
+            path
         };
-
         if !seen.insert(tex_path.clone()) {
             continue;
         }
-
         if existing_paths.contains(&tex_path) {
             continue;
         }
-
         result.push((tex_path, INVIS_TEX.to_vec()));
     }
-
     result
 }
 
@@ -303,53 +534,176 @@ pub fn missing_invis_placeholders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hematite_types::bin::{BinObject, BinProperty, BinTree, PropertyValue};
+    use hematite_types::hash::{PathHash, TypeHash};
+    use indexmap::IndexMap;
+
+    fn dummy_hash(s: &str) -> u64 {
+        // Deterministic, not the real xxhash64 — fine for tests because
+        // we use the same fn on both sides of the index check.
+        s.bytes().fold(0u64, |a, b| a.wrapping_mul(131).wrapping_add(b as u64))
+    }
+
+    fn opts(prefix: &str, layout: RepathLayout) -> RepathOptions {
+        let mut o = RepathOptions::new(prefix);
+        o.layout = layout;
+        o
+    }
+
+    // -- repath_path: Topaz layout --------------------------------------
 
     #[test]
-    fn test_insert_prefix_with_slash() {
+    fn topaz_layout_assets() {
         assert_eq!(
-            insert_prefix("assets/characters/aatrox/skins/skin0/texture.dds", "bum"),
-            "assets/bum/characters/aatrox/skins/skin0/texture.dds"
+            repath_path(
+                "assets/characters/yone/skins/skin0/yone_base.skn",
+                ".yone1_",
+                RepathLayout::InFolder
+            ),
+            "ASSETS/.yone1_characters/yone/skins/skin0/yone_base.skn"
         );
     }
 
     #[test]
-    fn test_insert_prefix_data_path() {
+    fn topaz_layout_data() {
         assert_eq!(
-            insert_prefix("data/characters/aatrox/skins/skin0.bin", "bum"),
-            "data/bum/characters/aatrox/skins/skin0.bin"
+            repath_path(
+                "data/characters/yone/animations/skin0.bin",
+                ".yone1_",
+                RepathLayout::InFolder
+            ),
+            "DATA/.yone1_characters/yone/animations/skin0.bin"
         );
     }
 
     #[test]
-    fn test_insert_prefix_no_slash() {
-        assert_eq!(insert_prefix("texture.dds", "bum"), "bum/texture.dds");
-    }
-
-    #[test]
-    fn test_repath_wad_path_skips_bin() {
-        assert!(repath_wad_path("data/characters/aatrox/skins/skin0.bin", "bum").is_none());
-    }
-
-    #[test]
-    fn test_repath_wad_path_renames_dds() {
+    fn topaz_layout_short_path() {
+        // Path with only the root + one segment.
         assert_eq!(
-            repath_wad_path("assets/characters/aatrox/skins/skin0/texture.dds", "bum"),
-            Some("assets/bum/characters/aatrox/skins/skin0/texture.dds".to_string())
+            repath_path("assets/spells/yone_q.bin", ".yone1_", RepathLayout::InFolder),
+            "ASSETS/.yone1_spells/yone_q.bin"
         );
     }
 
     #[test]
-    fn test_repath_wad_path_skips_unknown_prefix() {
-        assert!(repath_wad_path("sounds/effects/explosion.bnk", "bum").is_none());
+    fn topaz_layout_root_only() {
+        // Just "assets/" — nothing meaningful to do.
+        assert_eq!(
+            repath_path("assets/", ".yone1_", RepathLayout::InFolder),
+            "assets/"
+        );
     }
 
     #[test]
-    fn test_repath_bin_strings() {
-        use hematite_types::bin::{BinObject, BinProperty, BinTree};
-        use hematite_types::hash::{PathHash, TypeHash};
-        use indexmap::IndexMap;
-        use hematite_types::bin::PropertyValue;
+    fn topaz_layout_case_insensitive_root() {
+        assert_eq!(
+            repath_path("ASSETS/Characters/Yone/skin.dds", ".yone1_", RepathLayout::InFolder),
+            "ASSETS/.yone1_Characters/Yone/skin.dds"
+        );
+    }
 
+    #[test]
+    fn non_asset_path_passes_through() {
+        // Non-asset extension + no canonical root → passthrough.
+        assert_eq!(
+            repath_path("sounds/effects/explosion.bnk", ".x_", RepathLayout::InFolder),
+            // .bnk is in MODDER_ROOT_EXTS so this actually *does* get
+            // treated as a modder-root path. That's the documented behavior:
+            // any string ending in a known asset extension with a slash is
+            // a candidate.
+            ".x_/sounds/effects/explosion.bnk"
+        );
+        // Plain string with no slash → passthrough.
+        assert_eq!(
+            repath_path("just_a_name", ".x_", RepathLayout::InFolder),
+            "just_a_name"
+        );
+        // Slash but non-asset extension → passthrough.
+        assert_eq!(
+            repath_path("some/random/path.txt", ".x_", RepathLayout::InFolder),
+            "some/random/path.txt"
+        );
+    }
+
+    // -- repath_path: modder-root layout --------------------------------
+
+    #[test]
+    fn modder_root_path_gets_prefix_prepended() {
+        // Reddivinekinggaren-style modder handle with no canonical root.
+        // Layout shouldn't matter — modder-root paths use a single shape.
+        assert_eq!(
+            repath_path("reddivinekinggaren/foo.dds", "bum", RepathLayout::InFolder),
+            "bum/reddivinekinggaren/foo.dds"
+        );
+        assert_eq!(
+            repath_path("reddivinekinggaren/foo.dds", "bum", RepathLayout::Nested),
+            "bum/reddivinekinggaren/foo.dds"
+        );
+        // Custom extension like .scb also recognised.
+        assert_eq!(
+            repath_path("modder/effects/sparkle.scb", "bum", RepathLayout::InFolder),
+            "bum/modder/effects/sparkle.scb"
+        );
+    }
+
+    // -- repath_path: nested layout -------------------------------------
+
+    #[test]
+    fn nested_layout_assets() {
+        assert_eq!(
+            repath_path(
+                "assets/characters/yone/skin.dds",
+                "yone1",
+                RepathLayout::Nested
+            ),
+            "assets/yone1/characters/yone/skin.dds"
+        );
+    }
+
+    // -- root skin detection --------------------------------------------
+
+    #[test]
+    fn root_skin_detection() {
+        assert!(is_root_skin_bin("data/characters/yone/yone.bin"));
+        assert!(is_root_skin_bin("DATA/Characters/Yone/Yone.bin"));
+        assert!(is_root_skin_bin("data/characters/yone/skins/skin0.bin"));
+        assert!(is_root_skin_bin("data/characters/yone/skins/skin27.bin"));
+        assert!(is_root_skin_bin("data/characters/yone/skins/root.bin"));
+
+        assert!(!is_root_skin_bin("data/characters/yone/animations/skin0.bin"));
+        assert!(!is_root_skin_bin("data/characters/yone/skins/skin0/effects.bin"));
+        assert!(!is_root_skin_bin("data/shared/foo.bin"));
+        assert!(!is_root_skin_bin("assets/characters/yone/yone.bin"));
+        assert!(!is_root_skin_bin("data/characters/yone/yoneother.bin"));
+    }
+
+    #[test]
+    fn repath_wad_path_skips_root_skin() {
+        assert!(repath_wad_path(
+            "data/characters/yone/skins/skin0.bin",
+            ".yone1_",
+            RepathLayout::InFolder
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn repath_wad_path_repaths_linked_bin() {
+        // Animation BINs (linked from the root skin BIN) MUST be repathed
+        // because the string ref inside the root BIN is repathed.
+        assert_eq!(
+            repath_wad_path(
+                "data/characters/yone/animations/skin0.bin",
+                ".yone1_",
+                RepathLayout::InFolder
+            ),
+            Some("DATA/.yone1_characters/yone/animations/skin0.bin".to_string())
+        );
+    }
+
+    // -- BIN content repathing -----------------------------------------
+
+    fn make_tree_with_string(s: &str) -> BinTree {
         let mut tree = BinTree::default();
         let mut obj = BinObject {
             class_hash: TypeHash(0x1234),
@@ -360,155 +714,258 @@ mod tests {
             0x1,
             BinProperty {
                 name_hash: FieldHash(0x1),
-                value: PropertyValue::String(
-                    "assets/characters/aatrox/skins/skin0/texture.dds".to_string(),
-                ),
+                value: PropertyValue::String(s.to_string()),
             },
         );
         tree.objects.insert(0x5678, obj);
+        tree
+    }
 
-        // File exists in WAD → should be repathed
-        let wad_paths: HashSet<String> = vec![
-            "assets/characters/aatrox/skins/skin0/texture.dds".to_string(),
-        ]
-        .into_iter()
-        .collect();
+    #[test]
+    fn bin_string_repathed_when_file_present() {
+        let mut tree =
+            make_tree_with_string("assets/characters/yone/skins/skin0/yone.dds");
+        let idx = WadIndex::from_entries(vec![(
+            0,
+            "assets/characters/yone/skins/skin0/yone.dds".to_string(),
+        )]);
 
-        let result = repath_bin_strings(&mut tree, "bum", true, &wad_paths);
-        assert_eq!(result.strings_repathed, 1);
-        assert_eq!(result.new_paths.len(), 1);
+        let r = repath_bin_strings(
+            &mut tree,
+            &opts(".yone1_", RepathLayout::InFolder),
+            &idx,
+            dummy_hash,
+        );
+        assert_eq!(r.strings_repathed, 1);
+        assert_eq!(r.mapping.len(), 1);
+        let new = r
+            .mapping
+            .get("assets/characters/yone/skins/skin0/yone.dds")
+            .unwrap();
+        assert_eq!(new, "ASSETS/.yone1_characters/yone/skins/skin0/yone.dds");
+    }
+
+    #[test]
+    fn bin_string_skipped_when_file_absent() {
+        let mut tree =
+            make_tree_with_string("assets/characters/yone/base/yone.skn");
+        let idx = WadIndex::from_entries(vec![(
+            0,
+            "assets/characters/yone/skins/skin0/yone.dds".to_string(),
+        )]);
+
+        let r = repath_bin_strings(
+            &mut tree,
+            &opts(".yone1_", RepathLayout::InFolder),
+            &idx,
+            dummy_hash,
+        );
+        assert_eq!(r.strings_repathed, 0);
+    }
+
+    #[test]
+    fn bin_string_matched_via_xxhash_alternate() {
+        // The mod ships only an unresolved hex entry — but its xxhash matches.
+        let mut tree =
+            make_tree_with_string("assets/characters/yone/skins/skin0/yone.dds");
+        // Pretend the WAD has only the hash, no resolved path.
+        let h = dummy_hash("assets/characters/yone/skins/skin0/yone.dds");
+        let mut idx = WadIndex::new();
+        idx.hashes.insert(h);
+
+        let r = repath_bin_strings(
+            &mut tree,
+            &opts(".yone1_", RepathLayout::InFolder),
+            &idx,
+            dummy_hash,
+        );
+        assert_eq!(r.strings_repathed, 1);
+    }
+
+    #[test]
+    fn bin_string_dds_tex_alternate() {
+        // BIN says .dds, mod ships .tex — should still repath.
+        let mut tree =
+            make_tree_with_string("assets/characters/yone/skins/skin0/yone.dds");
+        let idx = WadIndex::from_entries(vec![(
+            0,
+            "assets/characters/yone/skins/skin0/yone.tex".to_string(),
+        )]);
+
+        let r = repath_bin_strings(
+            &mut tree,
+            &opts(".yone1_", RepathLayout::InFolder),
+            &idx,
+            dummy_hash,
+        );
+        assert_eq!(r.strings_repathed, 1);
+    }
+
+    #[test]
+    fn bin_string_skips_vo() {
+        let mut tree = make_tree_with_string(
+            "assets/sounds/wwise2016/vo/yone/en_us/yone_vo.bnk",
+        );
+        let idx = WadIndex::from_entries(vec![(
+            0,
+            "assets/sounds/wwise2016/vo/yone/en_us/yone_vo.bnk".to_string(),
+        )]);
+
+        let r = repath_bin_strings(
+            &mut tree,
+            &opts(".yone1_", RepathLayout::InFolder),
+            &idx,
+            dummy_hash,
+        );
+        assert_eq!(r.strings_repathed, 0);
+    }
+
+    #[test]
+    fn linked_deps_repathed() {
+        let mut tree = make_tree_with_string("dummy");
+        tree.linked = vec![
+            "data/characters/yone/yone.bin".to_string(),                // root — skip
+            "data/characters/yone/animations/skin0.bin".to_string(),    // linked — repath
+        ];
+        let idx = WadIndex::from_entries(vec![
+            (0, "data/characters/yone/yone.bin".to_string()),
+            (0, "data/characters/yone/animations/skin0.bin".to_string()),
+        ]);
+
+        let r = repath_bin_strings(
+            &mut tree,
+            &opts(".yone1_", RepathLayout::InFolder),
+            &idx,
+            dummy_hash,
+        );
+        assert_eq!(r.strings_repathed, 1);
+        assert_eq!(tree.linked[0], "data/characters/yone/yone.bin");
         assert_eq!(
-            result.new_paths[0],
-            "assets/bum/characters/aatrox/skins/skin0/texture.dds"
+            tree.linked[1],
+            "DATA/.yone1_characters/yone/animations/skin0.bin"
         );
     }
 
-    #[test]
-    fn test_repath_bin_strings_skips_base_game_refs() {
-        use hematite_types::bin::{BinObject, BinProperty, BinTree};
-        use hematite_types::hash::{PathHash, TypeHash};
-        use indexmap::IndexMap;
-        use hematite_types::bin::PropertyValue;
-
-        let mut tree = BinTree::default();
-        let mut obj = BinObject {
-            class_hash: TypeHash(0x1234),
-            path_hash: PathHash(0x5678),
-            properties: IndexMap::new(),
-        };
-        // This path references a base-game asset NOT in the mod WAD
-        obj.properties.insert(
-            0x1,
-            BinProperty {
-                name_hash: FieldHash(0x1),
-                value: PropertyValue::String(
-                    "assets/characters/aatrox/skins/base/aatrox_base.skn".to_string(),
-                ),
-            },
-        );
-        tree.objects.insert(0x5678, obj);
-
-        // WAD only has skin0 texture, not the base SKN
-        let wad_paths: HashSet<String> = vec![
-            "assets/characters/aatrox/skins/skin0/texture.dds".to_string(),
-        ]
-        .into_iter()
-        .collect();
-
-        let result = repath_bin_strings(&mut tree, "bum", true, &wad_paths);
-        assert_eq!(result.strings_repathed, 0); // Must NOT repath base-game refs
-    }
+    // -- placeholders --------------------------------------------------
 
     #[test]
-    fn test_repath_bin_strings_dds_tex_alternate() {
-        use hematite_types::bin::{BinObject, BinProperty, BinTree};
-        use hematite_types::hash::{PathHash, TypeHash};
-        use indexmap::IndexMap;
-        use hematite_types::bin::PropertyValue;
-
-        let mut tree = BinTree::default();
-        let mut obj = BinObject {
-            class_hash: TypeHash(0x1234),
-            path_hash: PathHash(0x5678),
-            properties: IndexMap::new(),
-        };
-        // BIN references .dds but WAD has .tex
-        obj.properties.insert(
-            0x1,
-            BinProperty {
-                name_hash: FieldHash(0x1),
-                value: PropertyValue::String(
-                    "assets/characters/aatrox/skins/skin0/texture.dds".to_string(),
-                ),
-            },
-        );
-        tree.objects.insert(0x5678, obj);
-
-        let wad_paths: HashSet<String> = vec![
-            "assets/characters/aatrox/skins/skin0/texture.tex".to_string(),
-        ]
-        .into_iter()
-        .collect();
-
-        let result = repath_bin_strings(&mut tree, "bum", true, &wad_paths);
-        assert_eq!(result.strings_repathed, 1); // Should still repath via .tex alternate
-    }
-
-    #[test]
-    fn test_repath_bin_strings_skips_vo() {
-        use hematite_types::bin::{BinObject, BinProperty, BinTree};
-        use hematite_types::hash::{PathHash, TypeHash};
-        use indexmap::IndexMap;
-        use hematite_types::bin::PropertyValue;
-
-        let mut tree = BinTree::default();
-        let mut obj = BinObject {
-            class_hash: TypeHash(0x1234),
-            path_hash: PathHash(0x5678),
-            properties: IndexMap::new(),
-        };
-        obj.properties.insert(
-            0x1,
-            BinProperty {
-                name_hash: FieldHash(0x1),
-                value: PropertyValue::String(
-                    "assets/sounds/wwise2016/vo/aatrox/en_us/aatrox_base_vo.bnk".to_string(),
-                ),
-            },
-        );
-        tree.objects.insert(0x5678, obj);
-
-        let wad_paths: HashSet<String> = vec![
-            "assets/sounds/wwise2016/vo/aatrox/en_us/aatrox_base_vo.bnk".to_string(),
-        ]
-        .into_iter()
-        .collect();
-
-        let result = repath_bin_strings(&mut tree, "bum", true, &wad_paths);
-        assert_eq!(result.strings_repathed, 0);
-    }
-
-    #[test]
-    fn test_missing_invis_placeholders() {
-        let existing: HashSet<String> = vec!["assets/bum/existing.tex".to_string()]
+    fn placeholder_dedup_and_normalise() {
+        let existing: HashSet<String> = vec!["assets/x/existing.tex".to_string()]
             .into_iter()
             .collect();
         let referenced = vec![
-            "assets/bum/existing.dds".to_string(), // normalises to existing.tex — skipped
-            "assets/bum/missing.dds".to_string(),  // normalises to missing.tex — injected
-            "assets/bum/missing.tex".to_string(),  // already .tex — injected (deduped with above)
-            "assets/bum/other.tex".to_string(),    // distinct .tex — injected
-            "assets/bum/model.skn".to_string(),    // not a texture — skipped
+            "assets/x/existing.dds".to_string(), // → existing.tex (skip, already there)
+            "assets/x/missing.dds".to_string(),  // → missing.tex (add)
+            "assets/x/missing.tex".to_string(),  // dup of above
+            "assets/x/other.tex".to_string(),    // add
+            "assets/x/model.skn".to_string(),    // not a tex
         ];
-
-        let placeholders = missing_invis_placeholders(&existing, &referenced);
-        // missing.dds and missing.tex both normalise to missing.tex → 1 entry, not 2
-        assert_eq!(placeholders.len(), 2);
-        assert!(placeholders.iter().any(|(p, _)| p == "assets/bum/missing.tex"));
-        assert!(placeholders.iter().any(|(p, _)| p == "assets/bum/other.tex"));
-        // All placeholders must use INVIS_TEX bytes
-        for (_, bytes) in &placeholders {
+        let p = missing_invis_placeholders(&existing, &referenced);
+        assert_eq!(p.len(), 2);
+        assert!(p.iter().any(|(p, _)| p == "assets/x/missing.tex"));
+        assert!(p.iter().any(|(p, _)| p == "assets/x/other.tex"));
+        for (_, bytes) in &p {
             assert_eq!(bytes.as_slice(), INVIS_TEX);
         }
+    }
+
+    // -- magic detection -----------------------------------------------
+
+    #[test]
+    fn looks_like_bin_detects_prop_and_ptch() {
+        assert!(looks_like_bin(b"PROP\x00\x00\x00\x00"));
+        assert!(looks_like_bin(b"PTCH\x00\x00\x00\x00"));
+        assert!(!looks_like_bin(b"DDS \x00\x00\x00\x00"));
+        assert!(!looks_like_bin(b"PRO"));
+    }
+
+    // -- prefix derivation ---------------------------------------------
+
+    #[test]
+    fn derive_prefix_topaz_style() {
+        assert_eq!(RepathOptions::derive_prefix("Yone", 1), ".yone1_");
+        assert_eq!(RepathOptions::derive_prefix("Aatrox", 27), ".aatr27_");
+        assert_eq!(RepathOptions::derive_prefix("MissFortune", 10), ".miss10_");
+        assert_eq!(RepathOptions::derive_prefix("Kha'Zix", 0), ".khaz0_");
+        assert_eq!(RepathOptions::derive_prefix("", 5), "bum");
+    }
+
+    // -- remove_prefix (inverse) ---------------------------------------
+
+    #[test]
+    fn remove_prefix_topaz_in_folder() {
+        assert_eq!(
+            remove_prefix(
+                "ASSETS/.yone1_characters/yone/skin.dds",
+                ".yone1_"
+            ),
+            "assets/characters/yone/skin.dds"
+        );
+        assert_eq!(
+            remove_prefix(
+                "DATA/.yone1_characters/yone/animations/skin0.bin",
+                ".yone1_"
+            ),
+            "data/characters/yone/animations/skin0.bin"
+        );
+    }
+
+    #[test]
+    fn remove_prefix_nested() {
+        assert_eq!(
+            remove_prefix("assets/bum/characters/yone/skin.dds", "bum"),
+            "assets/characters/yone/skin.dds"
+        );
+    }
+
+    #[test]
+    fn remove_prefix_modder_root() {
+        assert_eq!(
+            remove_prefix("bum/reddivinekinggaren/foo.dds", "bum"),
+            "reddivinekinggaren/foo.dds"
+        );
+    }
+
+    #[test]
+    fn remove_prefix_idempotent_on_unprefixed() {
+        // Paths without the prefix are returned unchanged.
+        assert_eq!(
+            remove_prefix("assets/characters/yone/skin.dds", ".yone1_"),
+            "assets/characters/yone/skin.dds"
+        );
+    }
+
+    #[test]
+    fn remove_prefix_round_trip_in_folder() {
+        let original = "assets/characters/yone/skin.dds";
+        let repathed = repath_path(original, ".yone1_", RepathLayout::InFolder);
+        // Path round-trip strips back to lowercased canonical root form.
+        assert_eq!(remove_prefix(&repathed, ".yone1_"), original);
+    }
+
+    #[test]
+    fn remove_prefix_round_trip_modder_root() {
+        let original = "reddivinekinggaren/foo.dds";
+        let repathed = repath_path(original, "bum", RepathLayout::InFolder);
+        assert_eq!(remove_prefix(&repathed, "bum"), original);
+    }
+
+    // -- WAD path repathing covers modder-root entries ------------------
+
+    #[test]
+    fn repath_wad_path_modder_root_entry() {
+        // Mod ships a file under its own handle root; engine references
+        // it via repathed BIN string, so the WAD entry must also be
+        // renamed to keep the hash in sync.
+        assert_eq!(
+            repath_wad_path("reddivinekinggaren/foo.dds", "bum", RepathLayout::InFolder),
+            Some("bum/reddivinekinggaren/foo.dds".to_string())
+        );
+    }
+
+    #[test]
+    fn repath_wad_path_ignores_unknown_extension() {
+        // .txt isn't in MODDER_ROOT_EXTS — leave the entry alone.
+        assert!(repath_wad_path("modder/notes.txt", "bum", RepathLayout::InFolder).is_none());
     }
 }

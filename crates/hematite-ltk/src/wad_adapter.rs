@@ -18,6 +18,73 @@ pub fn wad_path_hash(path: &str) -> u64 {
     xxh64(path.to_lowercase().as_bytes(), 0)
 }
 
+/// Strip an inner "tag" segment from a filename's stem.
+///
+/// Riot occasionally ships files under a stripped name in the live game
+/// WAD even though the BIN string references a tagged variant — e.g.
+/// `attack1.matcha_ambessa.anm` lives in the WAD as `attack1.anm`. Mods
+/// authored against the tagged variant lose the reference unless we look
+/// the bytes up under both spellings.
+///
+/// Returns `Some(stripped)` when the filename has the shape
+/// `<stem>.<inner>.<ext>` (two dots, three segments). The inner segment is
+/// dropped:
+///
+/// ```text
+///   data/c/yone/anim/attack1.matcha_ambessa.anm
+/// → data/c/yone/anim/attack1.anm
+/// ```
+///
+/// Returns `None` for filenames that don't carry an inner tag segment
+/// (the common case — single-dot filenames pass through untouched).
+pub fn strip_inner_suffix(path: &str) -> Option<String> {
+    let (dir, file) = match path.rsplit_once('/') {
+        Some((d, f)) => (Some(d), f),
+        None => (None, path),
+    };
+    // Require exactly three segments split by '.': stem . inner . ext
+    let parts: Vec<&str> = file.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    if parts[0].is_empty() || parts[1].is_empty() || parts[2].is_empty() {
+        return None;
+    }
+    let stripped_file = format!("{}.{}", parts[0], parts[2]);
+    Some(match dir {
+        Some(d) => format!("{}/{}", d, stripped_file),
+        None => stripped_file,
+    })
+}
+
+/// Look up the WAD-side hash that corresponds to a BIN-referenced path.
+///
+/// The BIN's path is always the source of truth — the caller writes any
+/// bytes returned under `bin_hash`, not the resolved hash. Lookup variants
+/// tried in order of specificity:
+///
+/// 1. The literal `bin_hash` (`xxhash64(bin_path.to_lowercase())`).
+/// 2. The suffix-stripped form (see [`strip_inner_suffix`]) — covers Riot
+///    patches that strip the inner `.{tag}` segment from filenames.
+///
+/// Returns the *game-WAD* hash whose bytes to fetch, or `None` if neither
+/// variant exists in the provided hash set.
+pub fn resolve_wad_hash_for(
+    bin_path: &str,
+    bin_hash: u64,
+    wad_hashes: &HashSet<u64>,
+) -> Option<u64> {
+    if wad_hashes.contains(&bin_hash) {
+        return Some(bin_hash);
+    }
+    let stripped = strip_inner_suffix(bin_path)?;
+    let stripped_hash = wad_path_hash(&stripped);
+    if wad_hashes.contains(&stripped_hash) {
+        return Some(stripped_hash);
+    }
+    None
+}
+
 /// WAD provider backed by league-toolkit's ltk_wad.
 ///
 /// Stores only the set of path hashes for fast existence checks.
@@ -118,6 +185,60 @@ impl<R: Read + Seek> WadFile<R> {
             provider.path_hashes.insert(chunk.path_hash);
         }
         provider
+    }
+
+    /// Set of every chunk's `path_hash`. Cheap snapshot, useful for
+    /// suffix-stripped fallback resolution via [`resolve_wad_hash_for`].
+    pub fn chunk_hash_set(&self) -> HashSet<u64> {
+        self.wad.chunks().iter().map(|c| c.path_hash).collect()
+    }
+
+    /// Extract a single chunk by its xxhash64 path hash.
+    ///
+    /// Returns `Ok(None)` when the hash isn't present in the WAD. Honors
+    /// the per-chunk size limit.
+    pub fn extract_chunk_by_hash(&mut self, hash: u64) -> Result<Option<Vec<u8>>> {
+        let Some(chunk) = self.wad.chunks().get(hash).copied() else {
+            return Ok(None);
+        };
+        let chunk_size = chunk.uncompressed_size as u64;
+        if chunk_size > Self::MAX_CHUNK_SIZE {
+            tracing::warn!(
+                "Refused chunk {:016x}: {} bytes exceeds {} limit",
+                hash,
+                chunk_size,
+                Self::MAX_CHUNK_SIZE
+            );
+            return Ok(None);
+        }
+        match self.wad.load_chunk_decompressed(&chunk) {
+            Ok(data) => Ok(Some(data.to_vec())),
+            Err(e) => {
+                tracing::warn!("Failed to extract chunk {:016x}: {e:?}", hash);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Look up a chunk by a BIN-referenced *path*, with suffix-stripped
+    /// fallback (see [`resolve_wad_hash_for`] / [`strip_inner_suffix`]).
+    ///
+    /// The returned `Vec<u8>` is the live game-WAD bytes for the requested
+    /// asset — callers should store it under the BIN's hash regardless of
+    /// whether the lookup hit the literal or stripped form.
+    pub fn extract_chunk_for_path(&mut self, bin_path: &str) -> Result<Option<Vec<u8>>> {
+        let bin_hash = wad_path_hash(bin_path);
+        let hashes = self.chunk_hash_set();
+        let Some(src_hash) = resolve_wad_hash_for(bin_path, bin_hash, &hashes) else {
+            return Ok(None);
+        };
+        if src_hash != bin_hash {
+            tracing::debug!(
+                bin_path = %bin_path,
+                "wad_adapter: resolved chunk via suffix-stripped fallback"
+            );
+        }
+        self.extract_chunk_by_hash(src_hash)
     }
 
     /// Extract all BIN files from the WAD.
@@ -326,5 +447,73 @@ impl<R: Read + Seek> WadFile<R> {
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_inner_suffix_three_segment_filename() {
+        // The Riot rename: drop the inner tag segment.
+        assert_eq!(
+            strip_inner_suffix("data/characters/ambessa/anim/attack1.matcha_ambessa.anm"),
+            Some("data/characters/ambessa/anim/attack1.anm".to_string())
+        );
+        // Works without a directory.
+        assert_eq!(
+            strip_inner_suffix("attack1.matcha_ambessa.anm"),
+            Some("attack1.anm".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_inner_suffix_passes_through_single_dot() {
+        // Normal one-extension filenames have nothing to strip.
+        assert_eq!(strip_inner_suffix("data/characters/yone/yone.bin"), None);
+        assert_eq!(strip_inner_suffix("attack1.anm"), None);
+    }
+
+    #[test]
+    fn strip_inner_suffix_rejects_more_than_three_segments() {
+        // Don't make decisions about deeply-dotted filenames.
+        assert_eq!(strip_inner_suffix("a.b.c.d"), None);
+    }
+
+    #[test]
+    fn resolve_wad_hash_for_prefers_literal() {
+        let mut hashes = HashSet::new();
+        let path = "data/characters/yone/anim/attack1.matcha.anm";
+        let h = wad_path_hash(path);
+        hashes.insert(h);
+
+        // Literal in set → return it.
+        assert_eq!(resolve_wad_hash_for(path, h, &hashes), Some(h));
+    }
+
+    #[test]
+    fn resolve_wad_hash_for_falls_back_to_stripped() {
+        let mut hashes = HashSet::new();
+        let stripped = "data/characters/yone/anim/attack1.anm";
+        hashes.insert(wad_path_hash(stripped));
+
+        // BIN references the tagged form; WAD only has stripped.
+        let tagged = "data/characters/yone/anim/attack1.matcha.anm";
+        let tagged_hash = wad_path_hash(tagged);
+        assert_eq!(
+            resolve_wad_hash_for(tagged, tagged_hash, &hashes),
+            Some(wad_path_hash(stripped))
+        );
+    }
+
+    #[test]
+    fn resolve_wad_hash_for_returns_none_when_neither_present() {
+        let hashes = HashSet::new();
+        let path = "data/characters/yone/anim/missing.matcha.anm";
+        assert_eq!(
+            resolve_wad_hash_for(path, wad_path_hash(path), &hashes),
+            None
+        );
     }
 }

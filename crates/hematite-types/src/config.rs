@@ -168,6 +168,16 @@ pub enum TransformAction {
         to: String,
         #[serde(default)]
         path_prefixes: Vec<String>,
+        /// Optional regex on the **field name** carrying the string. When
+        /// set, only fields whose resolved name matches the regex are
+        /// rewritten. Used to scope HUD-only conversions like
+        /// `(?i)iconcircle|iconsquare` so the rule doesn't touch material
+        /// or particle textures.
+        ///
+        /// Fields whose hash can't be resolved (e.g. missing from the
+        /// dictionary) are skipped when a filter is set.
+        #[serde(default)]
+        field_filter: Option<String>,
     },
 
     /// Mark file for removal from WAD.
@@ -217,6 +227,36 @@ pub enum TransformAction {
     RemoveUnreferencedEntries {
         main_entry_type: String,
         targets: Vec<EntryValidationTarget>,
+    },
+
+    /// Move every object whose class name is in `entry_types` out of the
+    /// source BIN and into a brand-new BIN written at
+    /// `output_path_template`. Powers VFX separation (split
+    /// `VfxSystemDefinitionData` entries into `{champ}_vfx_skin{N}.bin`)
+    /// and similar object-extraction fixes.
+    ///
+    /// `output_path_template` supports a small set of substitutions
+    /// resolved from the source file's path (see
+    /// [`split_entries::resolve_template`]):
+    ///
+    /// * `{source_dir}` — directory of the source path (no trailing `/`)
+    /// * `{source_stem}` — source filename without extension
+    /// * `{source_ext}` — source extension (no leading dot)
+    /// * `{champion}` — champion folder from `data/characters/{X}/...` (lowercased)
+    /// * `{skin}` — first integer in the source stem (e.g. `0` for `skin0`)
+    ///
+    /// When `link_in_source` is true the new BIN's path is appended to
+    /// the source's linked-deps list so the engine resolves both files
+    /// together.
+    #[serde(rename = "split_entries_by_type")]
+    SplitEntriesByType {
+        /// Class names whose objects get moved into the new BIN.
+        entry_types: Vec<String>,
+        /// Path template for the new BIN (see above for substitutions).
+        output_path_template: String,
+        /// Add `output_path_template` to `source.linked` after the split.
+        #[serde(default = "default_true")]
+        link_in_source: bool,
     },
 }
 
@@ -279,6 +319,14 @@ pub enum WadDetectionRule {
         #[serde(default)]
         binary_check: Option<BinaryHeaderCheck>,
     },
+
+    /// Always matches — every file in the WAD is a candidate. Used
+    /// almost exclusively as a trigger for WAD-level actions that don't
+    /// care about a specific input file (e.g. `add_files`). The pipeline
+    /// short-circuits the per-file loop for actions that operate on the
+    /// WAD as a whole, so this rule only fires once.
+    #[serde(rename = "always")]
+    Always,
 }
 
 /// Binary header validation for file format checks.
@@ -345,6 +393,48 @@ pub enum WadTransformAction {
         /// Replacement string (supports $1, $2 capture groups)
         replacement: String,
     },
+
+    /// Apply an in-place byte transform to a matched file. Path and
+    /// extension are preserved; only the contents change. Used for
+    /// operations like mipmap stripping and TEX dimension fixes that
+    /// don't produce a renamed output.
+    #[serde(rename = "transform_bytes")]
+    TransformBytes {
+        /// Converter name (must be registered in the converter registry).
+        /// The same registry serves [`Self::ConvertFormat`].
+        converter: String,
+    },
+
+    /// Inject standalone files into the WAD. Used for fallback texture
+    /// registries and similar "always present" assets. The `assets`
+    /// list is materialised via the asset registry — a path here maps
+    /// to embedded bytes inside `hematite-core`.
+    ///
+    /// Detection is intentionally not enforced for this action; a rule
+    /// using `add_files` typically pairs with a `file_pattern` detection
+    /// that always matches (e.g. matches the WAD's existence) so the
+    /// pipeline only emits the assets once.
+    #[serde(rename = "add_files")]
+    AddFiles {
+        /// Logical asset names → target WAD paths. The name is looked
+        /// up in the embedded asset registry (see
+        /// `hematite-core/src/assets/registry.rs`).
+        assets: Vec<AssetInjection>,
+    },
+}
+
+/// One entry in a `WadTransformAction::AddFiles` action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetInjection {
+    /// Name of the embedded asset (e.g. `"invis_tex"`, `"toonshading_tex"`).
+    pub asset: String,
+    /// WAD path the asset bytes should appear at. Path-hashed via xxh64
+    /// when written.
+    pub path: String,
+    /// Only inject when the WAD doesn't already contain `path`.
+    /// `true` is the safe default — never overwrite an existing file.
+    #[serde(default = "default_true")]
+    pub only_if_missing: bool,
 }
 
 /// All BIN data types for value creation.

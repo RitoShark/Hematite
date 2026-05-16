@@ -22,6 +22,7 @@
 //! - [`strings`] — Extension replace, FNV-1a hash, path normalization
 //! - [`fallback`] — Asset fallback with Jaro-Winkler similarity
 
+pub mod assets;
 pub mod context;
 pub mod detect;
 pub mod factory;
@@ -29,6 +30,7 @@ pub mod fallback;
 pub mod filter;
 pub mod pipeline;
 pub mod repath;
+pub mod seeds;
 pub mod strings;
 pub mod traits;
 pub mod transform;

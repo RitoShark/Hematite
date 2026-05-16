@@ -24,6 +24,7 @@ pub mod remove_unreferenced;
 pub mod rename_hash;
 pub mod replace_ext;
 pub mod shader_fallback;
+pub mod split_entries;
 pub mod vfx_shape;
 
 use crate::context::FixContext;
@@ -65,7 +66,14 @@ pub fn apply_transform(
             from,
             to,
             path_prefixes,
-        } => replace_ext::apply(ctx, from, to, path_prefixes),
+            field_filter,
+        } => replace_ext::apply(
+            ctx,
+            from,
+            to,
+            path_prefixes,
+            field_filter.as_deref(),
+        ),
         TransformAction::RemoveFromWad => remove::apply(ctx),
         TransformAction::ChangeFieldType {
             from_type,
@@ -103,5 +111,10 @@ pub fn apply_transform(
             main_entry_type,
             targets,
         } => remove_unreferenced::apply(ctx, main_entry_type, targets),
+        TransformAction::SplitEntriesByType {
+            entry_types,
+            output_path_template,
+            link_in_source,
+        } => split_entries::apply(ctx, entry_types, output_path_template, *link_in_source),
     }
 }

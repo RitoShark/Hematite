@@ -38,4 +38,10 @@ pub struct FixContext<'a> {
 
     /// Shader validator for shader fallback fixes (optional).
     pub shader_validator: Option<&'a ShaderValidator>,
+
+    /// Additional BIN files produced by this fix session. Populated by
+    /// transforms that split entries out of the source BIN into their own
+    /// `(path, tree)` pair (e.g. VFX separation). Consumed by the WAD
+    /// rebuild step in the caller — the pipeline itself just collects.
+    pub additional_bins: Vec<(String, BinTree)>,
 }

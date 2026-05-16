@@ -17,6 +17,10 @@ pub fn check_file(path: &str, bytes: &[u8], rule: &WadDetectionRule) -> Result<b
             pattern,
             binary_check,
         } => check_pattern(path, pattern, bytes, binary_check.as_ref()),
+        // `Always` is consumed at the rule level (see wad_pipeline::mod),
+        // not via per-file iteration. Returning `false` here keeps the
+        // per-file loop a no-op for this variant.
+        WadDetectionRule::Always => Ok(false),
     }
 }
 

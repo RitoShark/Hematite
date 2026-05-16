@@ -14,6 +14,10 @@ pub enum ActionResult {
         to_ext: String,
         converter: String,
     },
+    /// In-place byte transform — same path, mutated contents.
+    TransformInPlace {
+        converter: String,
+    },
     RenameFile {
         new_path: String,
     },
@@ -39,6 +43,10 @@ pub fn apply_action(
             converter: converter.clone(),
         }),
 
+        WadTransformAction::TransformBytes { converter } => Ok(ActionResult::TransformInPlace {
+            converter: converter.clone(),
+        }),
+
         WadTransformAction::RenameFile {
             pattern,
             replacement,
@@ -57,5 +65,9 @@ pub fn apply_action(
 
             Ok(ActionResult::NoOp)
         }
+
+        // `AddFiles` doesn't operate on a single matched file; it's
+        // processed at the rule level by `apply_single_fix`.
+        WadTransformAction::AddFiles { .. } => Ok(ActionResult::NoOp),
     }
 }

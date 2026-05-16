@@ -25,7 +25,9 @@ pub mod transform;
 
 use anyhow::Result;
 use crate::traits::HashProvider;
-use hematite_types::config::{FixConfig, WadFixRule};
+use hematite_types::config::{
+    FixConfig, WadDetectionRule, WadFixRule, WadTransformAction,
+};
 
 /// Result of applying a single WAD-level fix.
 #[derive(Debug, Clone)]
@@ -69,8 +71,14 @@ pub struct WadFixOutput {
     pub files_to_remove: Vec<String>,
     /// Files to convert (path, from_ext, to_ext, converter_name)
     pub files_to_convert: Vec<FileConversion>,
+    /// Files to transform in place (path, converter_name).
+    pub files_to_transform: Vec<InPlaceTransform>,
     /// Files to rename (old_path, new_path)
     pub files_to_rename: Vec<(String, String)>,
+    /// New files to inject (path, asset_name). Bytes are resolved via the
+    /// CLI's asset registry — that keeps `hematite-core` free of any
+    /// hard-coded blob list.
+    pub files_to_add: Vec<FileAddition>,
     /// Applied fixes summary
     pub applied_fixes: Vec<WadFixResult>,
 }
@@ -83,11 +91,29 @@ pub struct FileConversion {
     pub converter: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct InPlaceTransform {
+    pub path: String,
+    pub converter: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileAddition {
+    /// Logical asset name (matches the registry key).
+    pub asset: String,
+    /// Target WAD path.
+    pub path: String,
+    /// Skip when the WAD already contains a file at `path`.
+    pub only_if_missing: bool,
+}
+
 impl WadFixOutput {
     fn merge(&mut self, other: WadFixOutput) {
         self.files_to_remove.extend(other.files_to_remove);
         self.files_to_convert.extend(other.files_to_convert);
+        self.files_to_transform.extend(other.files_to_transform);
         self.files_to_rename.extend(other.files_to_rename);
+        self.files_to_add.extend(other.files_to_add);
         self.applied_fixes.extend(other.applied_fixes);
     }
 }
@@ -107,6 +133,42 @@ fn apply_single_fix(
         .map(|(_, path, _)| path.to_lowercase())
         .collect();
 
+    // Whole-WAD actions: detection is implicit, we just emit instructions.
+    match (&fix_rule.detect, &fix_rule.apply) {
+        (WadDetectionRule::Always, WadTransformAction::AddFiles { assets }) => {
+            for inj in assets {
+                if inj.only_if_missing && file_paths.contains(&inj.path.to_lowercase()) {
+                    continue;
+                }
+                output.files_to_add.push(FileAddition {
+                    asset: inj.asset.clone(),
+                    path: inj.path.clone(),
+                    only_if_missing: inj.only_if_missing,
+                });
+                files_affected += 1;
+            }
+            if files_affected > 0 {
+                output.applied_fixes.push(WadFixResult {
+                    fix_id: fix_id.to_string(),
+                    fix_name: fix_rule.name.clone(),
+                    files_affected,
+                });
+            }
+            return Ok(output);
+        }
+        (WadDetectionRule::Always, _) => {
+            // Other actions paired with `Always` don't make sense at the
+            // WAD level. Skip silently rather than failing the run.
+            tracing::warn!(
+                "WAD fix '{}' uses `Always` detection but action {:?} isn't whole-WAD aware",
+                fix_id,
+                std::mem::discriminant(&fix_rule.apply)
+            );
+            return Ok(output);
+        }
+        _ => {}
+    }
+
     for (_, path, bytes) in files {
         // Check if this file matches the detection rule
         if detect::check_file(path, bytes, &fix_rule.detect)? {
@@ -123,11 +185,15 @@ fn apply_single_fix(
                     to_ext,
                     converter,
                 } => {
-                    // Check if converted file already exists in WAD - if so, skip
-                    let converted_path = path.replace(&format!(".{}", from_ext), &format!(".{}", to_ext));
+                    // Check if converted file already exists in WAD - if so, skip.
+                    // Same-extension transforms (no rename) are routed via
+                    // `TransformInPlace` instead — see below.
+                    let converted_path =
+                        path.replace(&format!(".{}", from_ext), &format!(".{}", to_ext));
 
-                    if file_paths.contains(&converted_path.to_lowercase()) {
-                        // Already exists - no need to convert
+                    if from_ext != to_ext
+                        && file_paths.contains(&converted_path.to_lowercase())
+                    {
                         tracing::debug!(
                             "Skipping conversion (target already exists): {} → {}",
                             path,
@@ -142,6 +208,13 @@ fn apply_single_fix(
                         });
                         files_affected += 1;
                     }
+                }
+                transform::ActionResult::TransformInPlace { converter } => {
+                    output.files_to_transform.push(InPlaceTransform {
+                        path: path.clone(),
+                        converter,
+                    });
+                    files_affected += 1;
                 }
                 transform::ActionResult::RenameFile { new_path } => {
                     output.files_to_rename.push((path.clone(), new_path));

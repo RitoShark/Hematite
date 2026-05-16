@@ -14,3 +14,4 @@ indexmap = { workspace = true }
 regex = "1.10"
 strsim = "0.11"
 tracing = "0.1"
+once_cell = "1.19"
