@@ -1,6 +1,6 @@
 {
-    "latest_cli_version": "0.3.1",
-    "min_cli_version": "0.3.0",
+    "latest_cli_version": "0.4.0",
+    "min_cli_version": "0.4.0",
     "download_url": "https://github.com/RitoShark/Hematite/releases/latest",
     "release_notes": "",
     "advisories": []
