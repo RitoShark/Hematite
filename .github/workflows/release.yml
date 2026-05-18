@@ -4,6 +4,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the release (e.g., v0.4.0). If omitted, the version from Cargo.toml will be used.'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -17,12 +22,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "name=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(sed -n '/\[workspace.package\]/,/^\[/p' Cargo.toml | grep '^version' | cut -d '"' -f 2)
+            if [ -n "$VERSION" ]; then
+              echo "name=v$VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            fi
+          fi
+
       - name: Generate changelog
         id: changelog
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
-          args: --latest --strip header
+          args: --tag ${{ steps.tag.outputs.name }} --strip header
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -44,8 +66,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: 'Hematite ${{ github.ref_name }}'
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: 'Hematite ${{ steps.tag.outputs.name }}'
           body: ${{ steps.changelog.outputs.content }}
           draft: false
           prerelease: false
