@@ -59,6 +59,9 @@ pub fn apply(ctx: &mut FixContext, entry_type: &str) -> u32 {
     let Some(simple_emitter_hash) = ctx.hashes.type_hash("SimpleEmitterDefinitionData") else {
         return 0;
     };
+    // Sometimes custom skins just use the base class or ParticleEmitterProperties directly
+    let vfx_emitter_hash = ctx.hashes.type_hash("VfxEmitterDefinitionData");
+    let particle_emitter_hash = ctx.hashes.type_hash("ParticleEmitterProperties");
 
     let hashes = VfxHashes {
         shape: ctx.hashes.field_hash("Shape"),
@@ -103,20 +106,28 @@ pub fn apply(ctx: &mut FixContext, entry_type: &str) -> u32 {
                 continue;
             };
 
-            if let PropertyValue::Container(emitters) = &mut prop.value {
+            if let PropertyValue::Container(emitters) | PropertyValue::UnorderedContainer(emitters) = &mut prop.value {
                 for emitter_val in emitters.iter_mut() {
-                    if let PropertyValue::Embedded(emitter) = emitter_val {
-                        let is_emitter = emitter.class_hash == complex_emitter_hash
-                            || emitter.class_hash == simple_emitter_hash;
-                        if !is_emitter {
-                            continue;
-                        }
+                    let emitter = match emitter_val {
+                        PropertyValue::Embedded(e) | PropertyValue::Struct(e) => e,
+                        _ => continue,
+                    };
+                    
+                    let is_emitter = emitter.class_hash == complex_emitter_hash
+                        || emitter.class_hash == simple_emitter_hash
+                        || vfx_emitter_hash.map(|h| h == emitter.class_hash).unwrap_or(false)
+                        || particle_emitter_hash.map(|h| h == emitter.class_hash).unwrap_or(false);
+                        
+                    if !is_emitter {
+                        continue;
+                    }
 
                         // Swap-remove the shape property so we can own and modify it,
                         // then re-insert under the new field hash.
                         let old_shape_prop = emitter.properties.swap_remove(&shape_hash.0);
                         if let Some(old_prop) = old_shape_prop {
-                            if let PropertyValue::Embedded(mut shape) = old_prop.value {
+                            let was_struct = matches!(old_prop.value, PropertyValue::Struct(_));
+                            if let PropertyValue::Embedded(mut shape) | PropertyValue::Struct(mut shape) = old_prop.value {
                                 let analysis = analyze_shape(&shape, &hashes);
 
                                 if analysis.needs_fix {
@@ -145,16 +156,16 @@ pub fn apply(ctx: &mut FixContext, entry_type: &str) -> u32 {
                                         shape_hash.0,
                                         BinProperty {
                                             name_hash: shape_hash,
-                                            value: PropertyValue::Embedded(shape),
+                                            value: if was_struct { PropertyValue::Struct(shape) } else { PropertyValue::Embedded(shape) },
                                         },
                                     );
                                 }
                             } else {
-                                // Not an Embedded value (e.g. already converted) — restore.
+                                // Not an Embedded/Struct value (e.g. already converted to something else?) — restore.
                                 emitter.properties.insert(shape_hash.0, old_prop);
                             }
                         }
-                    }
+                    // End of emitter block
                 }
             }
         }
@@ -260,8 +271,7 @@ fn analyze_shape(shape: &StructValue, hashes: &VfxHashes) -> ShapeAnalysis {
 
     // Determine if this is a single-EmitOffset shape (becomes SHAPE_TYPE_SIMPLE).
     // A shape qualifies if EmitOffset is the only field besides BirthTranslation.
-    let non_birth_count = shape.properties.len()
-        - if has_birth_translation { 1 } else { 0 };
+    let non_birth_count = shape.properties.len() - if has_birth_translation { 1 } else { 0 };
     analysis.has_single_emit_offset = has_emit_offset && non_birth_count == 1;
 
     analysis

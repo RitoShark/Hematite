@@ -370,13 +370,19 @@ fn detect_vfx_shape_needs_fix(tree: &BinTree, hashes: &dyn HashProvider, entry_t
                 &prop.value
             {
                 for item in items {
-                    if let PropertyValue::Embedded(emitter) = item {
-                        if let Some(shape_prop) = emitter.properties.get(&shape_hash.0) {
-                            if let PropertyValue::Embedded(shape) = &shape_prop.value {
-                                if has_old_vfx_shape_format(shape, &old_shape_field_hashes) {
-                                    return true;
-                                }
-                            }
+                    let emitter = match item {
+                        PropertyValue::Embedded(e) | PropertyValue::Struct(e) => e,
+                        _ => continue,
+                    };
+                    
+                    if let Some(shape_prop) = emitter.properties.get(&shape_hash.0) {
+                        let shape = match &shape_prop.value {
+                            PropertyValue::Embedded(s) | PropertyValue::Struct(s) => s,
+                            _ => continue,
+                        };
+                        
+                        if has_old_vfx_shape_format(shape, &old_shape_field_hashes) {
+                            return true;
                         }
                     }
                 }

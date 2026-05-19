@@ -67,13 +67,7 @@ pub fn apply_transform(
             to,
             path_prefixes,
             field_filter,
-        } => replace_ext::apply(
-            ctx,
-            from,
-            to,
-            path_prefixes,
-            field_filter.as_deref(),
-        ),
+        } => replace_ext::apply(ctx, from, to, path_prefixes, field_filter.as_deref()),
         TransformAction::RemoveFromWad => remove::apply(ctx),
         TransformAction::ChangeFieldType {
             from_type,

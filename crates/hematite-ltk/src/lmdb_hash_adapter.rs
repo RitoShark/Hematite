@@ -199,8 +199,8 @@ fn load_legacy_bin_dbs(env: &Env, rtxn: &RoTxn<'_>) -> Result<HashMap<u32, Strin
             .iter(rtxn)
             .with_context(|| format!("Failed to iterate legacy '{db_name}' database"))?
         {
-            let (key_bytes, name) = item
-                .with_context(|| format!("Failed to read legacy '{db_name}' entry"))?;
+            let (key_bytes, name) =
+                item.with_context(|| format!("Failed to read legacy '{db_name}' entry"))?;
             if let Some(hash) = read_u32_be(key_bytes) {
                 // First writer wins — consistent with the upstream
                 // builder's dedup-by-key behaviour after sorting.

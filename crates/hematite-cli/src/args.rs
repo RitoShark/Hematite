@@ -70,6 +70,15 @@ pub struct Cli {
     )]
     pub validate_entries: bool,
 
+    #[arg(long, help = "Convert DDS textures to TEX format")]
+    pub fix_textures: bool,
+
+    #[arg(long, help = "Convert ASCII SCO meshes to binary SCB")]
+    pub fix_meshes: bool,
+
+    #[arg(long, help = "Fix non-block-aligned TEX texture dimensions")]
+    pub fix_tex_dimensions: bool,
+
     #[arg(short, long, help = "Enable all fixes")]
     pub all: bool,
 
@@ -194,6 +203,9 @@ const ALL_FIX_IDS: &[&str] = &[
     "champion_bin_remover",
     "bnk_remover",
     "anm_remover",
+    "dds_texture_converter",
+    "sco_mesh_converter",
+    "fix_tex_dimensions",
     "vfx_shape_fix",
     "shader_fallback",
     "entry_validator",
@@ -235,6 +247,15 @@ pub fn collect_selected_fixes(cli: &Cli) -> Vec<String> {
     }
     if cli.validate_entries {
         fixes.push("entry_validator".into());
+    }
+    if cli.fix_textures {
+        fixes.push("dds_texture_converter".into());
+    }
+    if cli.fix_meshes {
+        fixes.push("sco_mesh_converter".into());
+    }
+    if cli.fix_tex_dimensions {
+        fixes.push("fix_tex_dimensions".into());
     }
 
     // If --all or no specific flags: apply all fixes

@@ -23,11 +23,9 @@ pub mod converters;
 pub mod detect;
 pub mod transform;
 
-use anyhow::Result;
 use crate::traits::HashProvider;
-use hematite_types::config::{
-    FixConfig, WadDetectionRule, WadFixRule, WadTransformAction,
-};
+use anyhow::Result;
+use hematite_types::config::{FixConfig, WadDetectionRule, WadFixRule, WadTransformAction};
 
 /// Result of applying a single WAD-level fix.
 #[derive(Debug, Clone)]
@@ -191,9 +189,7 @@ fn apply_single_fix(
                     let converted_path =
                         path.replace(&format!(".{}", from_ext), &format!(".{}", to_ext));
 
-                    if from_ext != to_ext
-                        && file_paths.contains(&converted_path.to_lowercase())
-                    {
+                    if from_ext != to_ext && file_paths.contains(&converted_path.to_lowercase()) {
                         tracing::debug!(
                             "Skipping conversion (target already exists): {} → {}",
                             path,

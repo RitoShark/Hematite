@@ -68,11 +68,9 @@ impl UiReporter {
             Mode::Live => {
                 let pb = ProgressBar::new_spinner();
                 pb.set_style(
-                    ProgressStyle::with_template(
-                        "  {spinner:.bright_red} {msg}",
-                    )
-                    .expect("BUG: hard-coded progress style is invalid")
-                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+                    ProgressStyle::with_template("  {spinner:.bright_red} {msg}")
+                        .expect("BUG: hard-coded progress style is invalid")
+                        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
                 );
                 pb.enable_steady_tick(Duration::from_millis(100));
                 Some(pb)
@@ -129,11 +127,7 @@ impl UiReporter {
                 name.bright_white(),
                 format!("({} change{})", n, if n == 1 { "" } else { "s" }).bright_black()
             ),
-            _ => format!(
-                "  {} {}",
-                "✓".bright_green().bold(),
-                name.bright_white()
-            ),
+            _ => format!("  {} {}", "✓".bright_green().bold(), name.bright_white()),
         };
         match &self.bar {
             Some(bar) => bar.println(line),

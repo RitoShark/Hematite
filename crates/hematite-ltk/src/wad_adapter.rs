@@ -101,6 +101,13 @@ impl LtkWadProvider {
         }
     }
 
+    /// Build from a set of hashes.
+    pub fn from_hashes(hashes: HashSet<u64>) -> Self {
+        Self {
+            path_hashes: hashes,
+        }
+    }
+
     /// Build from a WAD file on disk.
     pub fn from_file(path: &Path) -> Result<Self> {
         let file =
@@ -175,8 +182,8 @@ impl WadFile<BufReader<std::fs::File>> {
 
 impl<R: Read + Seek> WadFile<R> {
     // SECURITY: Limits to prevent resource exhaustion from malicious WAD files
-    const MAX_CHUNK_SIZE: u64 = 100 * 1024 * 1024; // 100MB per chunk
-    const MAX_TOTAL_EXTRACTED: u64 = 2 * 1024 * 1024 * 1024; // 2GB total
+    const MAX_CHUNK_SIZE: u64 = 1024 * 1024 * 1024; // 1GB per chunk
+    const MAX_TOTAL_EXTRACTED: u64 = 4 * 1024 * 1024 * 1024; // 4GB total
 
     /// Build an `LtkWadProvider` from this WAD's chunk list.
     pub fn build_provider(&self) -> LtkWadProvider {

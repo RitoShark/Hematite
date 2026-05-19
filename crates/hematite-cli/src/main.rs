@@ -168,14 +168,10 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         if !blocked
             && matches!(
                 version_outcome.status,
-                version_check::VersionStatus::UpToDate
-                    | version_check::VersionStatus::Unknown
+                version_check::VersionStatus::UpToDate | version_check::VersionStatus::Unknown
             )
         {
-            eprintln!(
-                "Hematite-CLI {} — up to date.",
-                env!("CARGO_PKG_VERSION")
-            );
+            eprintln!("Hematite-CLI {} — up to date.", env!("CARGO_PKG_VERSION"));
         }
         if blocked {
             std::process::exit(2);
@@ -190,8 +186,10 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
                  Pass --skip-version-check to override."
             );
         }
-    } else if matches!(version_outcome.status, version_check::VersionStatus::Outdated { .. })
-        && !cli.skip_version_check
+    } else if matches!(
+        version_outcome.status,
+        version_check::VersionStatus::Outdated { .. }
+    ) && !cli.skip_version_check
     {
         anyhow::bail!(
             "Refusing to run: CLI is older than the published minimum. \

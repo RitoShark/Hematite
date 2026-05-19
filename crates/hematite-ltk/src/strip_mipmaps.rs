@@ -222,9 +222,9 @@ fn strip_tex_mipmaps_inner(data: &[u8]) -> Option<Vec<u8>> {
 /// uncompressed BGRA8. Matches Riot's TEX format byte values.
 fn tex_format_block_info(format_byte: u8) -> Option<(usize, usize)> {
     match format_byte {
-        10 => Some((8, 4)),   // BC1 / DXT1
-        12 => Some((16, 4)),  // BC3 / DXT5
-        20 => Some((4, 1)),   // BGRA8
+        10 => Some((8, 4)),  // BC1 / DXT1
+        12 => Some((16, 4)), // BC3 / DXT5
+        20 => Some((4, 1)),  // BGRA8
         _ => None,
     }
 }

@@ -120,10 +120,7 @@ pub fn apply(
     moved
 }
 
-fn resolve_class_hashes(
-    hashes: &dyn HashProvider,
-    entry_types: &[String],
-) -> HashSet<TypeHash> {
+fn resolve_class_hashes(hashes: &dyn HashProvider, entry_types: &[String]) -> HashSet<TypeHash> {
     entry_types
         .iter()
         .filter_map(|name| {

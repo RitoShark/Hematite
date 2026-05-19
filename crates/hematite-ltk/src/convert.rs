@@ -351,7 +351,29 @@ fn ltk_container_to_vec(c: &Container) -> Result<Vec<PropertyValue>> {
                 vec.push(PropertyValue::Embedded(ltk_struct_to_hematite(&item.0)?));
             }
         }
-        _ => bail!("Unsupported container type"),
+        Container::WadChunkLink { items, .. } => {
+            for item in items {
+                vec.push(PropertyValue::Link(
+                    item.value.try_into().map_err(|_| anyhow::anyhow!("WadChunkLink value {} exceeds u32::MAX", item.value))?
+                ));
+            }
+        }
+        Container::ObjectLink { items, .. } => {
+            for item in items {
+                vec.push(PropertyValue::Link(item.value));
+            }
+        }
+        Container::Color { items, .. } => {
+            for item in items {
+                vec.push(PropertyValue::Color([item.value.r, item.value.g, item.value.b, item.value.a]));
+            }
+        }
+        Container::BitBool { items, .. } => {
+            for item in items {
+                vec.push(PropertyValue::BitBool(if item.value { 1 } else { 0 }));
+            }
+        }
+        Container::None { .. } => {}
     }
 
     Ok(vec)
@@ -538,6 +560,44 @@ fn vec_to_ltk_container(items: &[PropertyValue]) -> Result<LtkValue> {
                         ltk_items.push(Hash::new(*v));
                     }
                     _ => bail!("Mixed types in container"),
+                }
+            }
+            Container::from(ltk_items)
+        }
+        PropertyValue::WadHash(_) => {
+            let mut ltk_items = Vec::new();
+            for item in items {
+                if let PropertyValue::WadHash(v) = item {
+                    ltk_items.push(WadChunkLink::new(*v));
+                } else {
+                    bail!("Mixed types in container");
+                }
+            }
+            Container::from(ltk_items)
+        }
+        PropertyValue::Color(_) => {
+            let mut ltk_items = Vec::new();
+            for item in items {
+                if let PropertyValue::Color(rgba) = item {
+                    ltk_items.push(Color::new(ltk_primitives::Color {
+                        r: rgba[0],
+                        g: rgba[1],
+                        b: rgba[2],
+                        a: rgba[3],
+                    }));
+                } else {
+                    bail!("Mixed types in container");
+                }
+            }
+            Container::from(ltk_items)
+        }
+        PropertyValue::BitBool(_) => {
+            let mut ltk_items = Vec::new();
+            for item in items {
+                if let PropertyValue::BitBool(v) = item {
+                    ltk_items.push(BitBool::new(*v != 0));
+                } else {
+                    bail!("Mixed types in container");
                 }
             }
             Container::from(ltk_items)

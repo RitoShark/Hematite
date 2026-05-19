@@ -140,13 +140,21 @@ pub fn process_input(
     let mut total_result = ProcessResult::default();
 
     if input.is_dir() {
-        for entry in WalkDir::new(input) {
-            let entry = entry.context("Failed to read directory entry")?;
-            let path = entry.path();
-
-            if path.is_file() && is_supported_file(path) {
-                let result = process_file_with_hashes(path, &ctx, &hash_provider)?;
-                total_result.merge(result);
+        if is_wad_folder(input) {
+            total_result = process_wad_folder(input, &ctx, &hash_provider)?;
+        } else {
+            let mut it = WalkDir::new(input).into_iter();
+            while let Some(entry) = it.next() {
+                let entry = entry.context("Failed to read directory entry")?;
+                let path = entry.path();
+                if is_wad_folder(path) {
+                    let result = process_wad_folder(path, &ctx, &hash_provider)?;
+                    total_result.merge(result);
+                    it.skip_current_dir();
+                } else if path.is_file() && is_supported_file(path) {
+                    let result = process_file_with_hashes(path, &ctx, &hash_provider)?;
+                    total_result.merge(result);
+                }
             }
         }
     } else {
@@ -195,7 +203,11 @@ fn process_file_with_hashes(
     if ext == "bin" {
         process_bin_file(file, ctx, hash_provider)
     } else if file_name.ends_with(".wad.client") {
-        process_wad_file(file, ctx, hash_provider)
+        if file.is_dir() {
+            process_wad_folder(file, ctx, hash_provider)
+        } else {
+            process_wad_file(file, ctx, hash_provider)
+        }
     } else if ext == "fantome" || ext == "zip" {
         process_fantome_file(file, ctx, hash_provider)
     } else {
@@ -219,9 +231,7 @@ fn process_bin_file(
     let ui = ctx.ui.clone();
     ui.stage(&format!(
         "Processing {}…",
-        file.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("BIN")
+        file.file_name().and_then(|n| n.to_str()).unwrap_or("BIN")
     ));
     tracing::info!("Processing BIN: {}", file.display());
 
@@ -300,11 +310,7 @@ fn process_bin_file(
 
         tracing::info!("✓ Wrote fixed BIN to: {}", output_path.display());
         for fix in &result.applied_fixes {
-            tracing::info!(
-                "  ✓ {} ({} changes)",
-                fix.fix_name,
-                fix.changes_count
-            );
+            tracing::info!("  ✓ {} ({} changes)", fix.fix_name, fix.changes_count);
         }
         tracing::info!(
             "  Total: {} fixes, {} bytes written",
@@ -372,9 +378,8 @@ fn process_wad_file(
     // jinxmine alongside jinx) so the user can see they're being
     // processed and downstream pipeline steps can iterate over them.
     {
-        let seeds = hematite_core::seeds::discover_seeds(
-            all_files.iter().map(|(_, p, _)| p.as_str()),
-        );
+        let seeds =
+            hematite_core::seeds::discover_seeds(all_files.iter().map(|(_, p, _)| p.as_str()));
         if seeds.is_empty() {
             tracing::debug!("Seed discovery: no skin BINs found in TOC (binless mod?)");
         } else {
@@ -398,10 +403,7 @@ fn process_wad_file(
                     "WAD contains subchampion forms: {}",
                     names.join(", ")
                 ));
-                tracing::info!(
-                    "WAD contains subchampion forms: {}",
-                    names.join(", ")
-                );
+                tracing::info!("WAD contains subchampion forms: {}", names.join(", "));
             }
         }
     }
@@ -413,14 +415,16 @@ fn process_wad_file(
     // Run file-level fixes (BNK removal, format conversions, etc.)
     ctx.ui.stage("Detecting WAD-level issues…");
     tracing::debug!("Running WAD-level pipeline...");
-    let wad_output = wad_pipeline::apply_wad_fixes(&all_files, config, selected_fixes, hash_provider.as_ref())?;
+    let wad_output =
+        wad_pipeline::apply_wad_fixes(&all_files, config, selected_fixes, hash_provider.as_ref())?;
 
     // Collect files to remove from WAD-level fixes
     shared_files_to_remove.extend(wad_output.files_to_remove.clone());
 
     // Track WAD-level fixes applied
     for wad_fix in &wad_output.applied_fixes {
-        ctx.ui.fix_applied(&wad_fix.fix_name, Some(wad_fix.files_affected));
+        ctx.ui
+            .fix_applied(&wad_fix.fix_name, Some(wad_fix.files_affected));
         tracing::info!(
             "WAD-level fix '{}' affected {} files",
             wad_fix.fix_name,
@@ -436,8 +440,14 @@ fn process_wad_file(
     converter_registry.register("sco_to_scb", mesh_converter::sco_to_scb);
     // In-place byte transforms — same registry, but addressed via
     // `WadTransformAction::TransformBytes` rules.
-    converter_registry.register("strip_mipmaps", hematite_ltk::strip_mipmaps::strip_mipmaps_auto);
-    converter_registry.register("fix_tex_dims", hematite_ltk::fix_dimensions::fix_dimensions_auto);
+    converter_registry.register(
+        "strip_mipmaps",
+        hematite_ltk::strip_mipmaps::strip_mipmaps_auto,
+    );
+    converter_registry.register(
+        "fix_tex_dims",
+        hematite_ltk::fix_dimensions::fix_dimensions_auto,
+    );
 
     let mut conversion_count = 0u32;
     if !wad_output.files_to_convert.is_empty() {
@@ -448,20 +458,39 @@ fn process_wad_file(
 
         for conversion in &wad_output.files_to_convert {
             // Find the file in all_files
-            if let Some((_, _, bytes)) = all_files.iter_mut().find(|(_, p, _)| p == &conversion.path) {
+            if let Some((hash, path, bytes)) =
+                all_files.iter_mut().find(|(_, p, _)| p == &conversion.path)
+            {
                 match converter_registry.convert(&conversion.converter, bytes) {
                     Ok(converted_bytes) => {
                         let old_size = bytes.len();
                         *bytes = converted_bytes;
                         conversion_count += 1;
-                        tracing::info!(
-                            "✓ Converted {} from .{} to .{} ({} → {} bytes)",
-                            conversion.path,
-                            conversion.from_ext,
-                            conversion.to_ext,
-                            old_size,
-                            bytes.len()
-                        );
+
+                        if conversion.from_ext != conversion.to_ext {
+                            let old_path = path.clone();
+                            let new_path = path.replace(&format!(".{}", conversion.from_ext), &format!(".{}", conversion.to_ext));
+                            *path = new_path.clone();
+                            *hash = wad_path_hash(&new_path);
+                            tracing::info!(
+                                "✓ Converted {} from .{} to .{} ({} → {} bytes) and renamed to {}",
+                                old_path,
+                                conversion.from_ext,
+                                conversion.to_ext,
+                                old_size,
+                                bytes.len(),
+                                new_path
+                            );
+                        } else {
+                            tracing::info!(
+                                "✓ Converted {} from .{} to .{} ({} → {} bytes)",
+                                conversion.path,
+                                conversion.from_ext,
+                                conversion.to_ext,
+                                old_size,
+                                bytes.len()
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -534,10 +563,8 @@ fn process_wad_file(
         );
         // Build a fresh paths-in-WAD set so `only_if_missing` honours
         // anything we've already added during this loop.
-        let mut paths_in_wad: std::collections::HashSet<String> = all_files
-            .iter()
-            .map(|(_, p, _)| p.to_lowercase())
-            .collect();
+        let mut paths_in_wad: std::collections::HashSet<String> =
+            all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
         for addition in &wad_output.files_to_add {
             let lower = addition.path.to_lowercase();
             if addition.only_if_missing && paths_in_wad.contains(&lower) {
@@ -675,11 +702,7 @@ fn process_wad_file(
             }
             tracing::info!("  {} - {} fixes applied:", path, result.fixes_applied);
             for fix in &result.applied_fixes {
-                tracing::info!(
-                    "    ✓ {} ({} changes)",
-                    fix.fix_name,
-                    fix.changes_count
-                );
+                tracing::info!("    ✓ {} ({} changes)", fix.fix_name, fix.changes_count);
             }
         }
         ui.tick();
@@ -692,7 +715,9 @@ fn process_wad_file(
             match bin_provider.write_bytes(&ctx.tree) {
                 Ok(modified_bytes) => {
                     // Update the BIN bytes in all_files
-                    if let Some((_, _, file_bytes)) = all_files.iter_mut().find(|(_, p, _)| p == path) {
+                    if let Some((_, _, file_bytes)) =
+                        all_files.iter_mut().find(|(_, p, _)| p == path)
+                    {
                         let old_size = file_bytes.len();
                         *file_bytes = modified_bytes;
                         tracing::debug!(
@@ -743,11 +768,7 @@ fn process_wad_file(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to serialize split-BIN output {}: {}",
-                            new_path,
-                            e
-                        );
+                        tracing::warn!("Failed to serialize split-BIN output {}: {}", new_path, e);
                     }
                 }
             }
@@ -796,8 +817,8 @@ fn process_wad_file(
             let mut bins_touched = 0u32;
 
             for (_h, path, bytes) in all_files.iter_mut() {
-                let is_bin = path.to_lowercase().ends_with(".bin")
-                    || repath_core::looks_like_bin(bytes);
+                let is_bin =
+                    path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
                 if !is_bin {
                     continue;
                 }
@@ -862,9 +883,7 @@ fn process_wad_file(
                         .get(&lower)
                         .cloned()
                         .or_else(|| hash_mapping.get(&hash).cloned())
-                        .or_else(|| {
-                            repath_core::repath_wad_path(&path, &opts.prefix, opts.layout)
-                        });
+                        .or_else(|| repath_core::repath_wad_path(&path, &opts.prefix, opts.layout));
 
                     let final_path = match new_path_opt {
                         Some(np) => {
@@ -925,10 +944,7 @@ fn process_wad_file(
                 let placeholders =
                     repath_core::missing_invis_placeholders(&existing, &new_path_set);
                 if !placeholders.is_empty() {
-                    tracing::info!(
-                        "  Injecting {} invis placeholder(s)...",
-                        placeholders.len()
-                    );
+                    tracing::info!("  Injecting {} invis placeholder(s)...", placeholders.len());
                     for (path, bytes) in placeholders {
                         let hash = wad_path_hash(&path);
                         tracing::debug!("  + invis placeholder: {}", path);
@@ -990,9 +1006,12 @@ fn process_wad_file(
         let mut output_file =
             std::fs::File::create(&output_path).context("Failed to create output WAD file")?;
 
-        let chunks_included =
-            hematite_ltk::wad_builder::build_wad(&all_files, &shared_files_to_remove, &mut output_file)
-                .context("Failed to build output WAD")?;
+        let chunks_included = hematite_ltk::wad_builder::build_wad(
+            &all_files,
+            &shared_files_to_remove,
+            &mut output_file,
+        )
+        .context("Failed to build output WAD")?;
 
         // Only surface the WAD path to the UI when it's the real
         // user-visible output. WAD writes inside a temp dir are
@@ -1002,10 +1021,7 @@ fn process_wad_file(
         // the actual final path via ui.fix_applied.
         let is_intermediate = output_path.starts_with(std::env::temp_dir());
         if !is_intermediate {
-            ui.fix_applied(
-                &format!("Wrote {}", output_path.display()),
-                None,
-            );
+            ui.fix_applied(&format!("Wrote {}", output_path.display()), None);
         }
         tracing::info!("✓ Wrote fixed WAD to: {}", output_path.display());
         tracing::info!(
@@ -1017,6 +1033,608 @@ fn process_wad_file(
     } else if !dry_run {
         ui.note("No changes detected — WAD not modified.");
         tracing::info!("No changes detected - WAD not modified");
+    }
+
+    Ok(total_result)
+}
+
+/// Check if a path is a WAD folder.
+fn is_wad_folder(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_lowercase())
+        .unwrap_or_default();
+    file_name.ends_with(".wad.client")
+}
+
+/// Extract the WAD folder prefix/key from a path inside a ZIP.
+fn get_wad_folder_key(path: &str) -> Option<String> {
+    let lower = path.to_lowercase();
+    if let Some(idx) = lower.find(".wad.client/") {
+        Some(path[..idx + 11].to_string())
+    } else {
+        lower.find(".wad.client\\").map(|idx| path[..idx + 11].to_string())
+    }
+}
+
+/// Process a .wad.client folder.
+///
+/// Walks the directory, processes all files under it, runs pipelines, and saves modified files.
+fn process_wad_folder(
+    folder: &Path,
+    ctx: &ProcessContext<'_>,
+    hash_provider: &Arc<dyn HashProvider>,
+) -> Result<ProcessResult> {
+    let (config, selected_fixes, champions, dry_run, check, repath_opts) = (
+        ctx.config,
+        ctx.selected_fixes,
+        ctx.champions,
+        ctx.dry_run,
+        ctx.check,
+        ctx.repath_opts,
+    );
+    use hematite_core::wad_pipeline;
+    use hematite_ltk::wad_adapter::{wad_path_hash, LtkWadProvider};
+
+    tracing::info!("Processing WAD folder: {}", folder.display());
+
+    let bin_provider = LtkBinProvider;
+
+    // Extract all files from the WAD folder
+    let mut all_files = Vec::new();
+    let mut path_hashes = std::collections::HashSet::new();
+
+    for entry in WalkDir::new(folder) {
+        let entry = entry.context("Failed to read directory entry in WAD folder")?;
+        let path = entry.path();
+        if path.is_file() {
+            let rel_path = path
+                .strip_prefix(folder)
+                .context("Failed to strip prefix from WAD folder path")?;
+            let rel_path_str = rel_path.to_string_lossy().replace('\\', "/");
+            let hash = wad_path_hash(&rel_path_str);
+            let bytes = std::fs::read(path).context("Failed to read file in WAD folder")?;
+            all_files.push((hash, rel_path_str, bytes));
+            path_hashes.insert(hash);
+        }
+    }
+
+    let wad_provider = LtkWadProvider::from_hashes(path_hashes);
+
+    // Identify BIN entries by content magic, not just by path extension
+    let bin_chunks: Vec<_> = all_files
+        .iter()
+        .filter(|(_h, path, bytes)| {
+            path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes)
+        })
+        .cloned()
+        .collect();
+
+    tracing::info!(
+        "WAD folder has {} total entries, {} BIN file(s)",
+        all_files.len(),
+        bin_chunks.len()
+    );
+
+    // Discover champion/skin seeds from the resolved TOC.
+    {
+        let seeds =
+            hematite_core::seeds::discover_seeds(all_files.iter().map(|(_, p, _)| p.as_str()));
+        if seeds.is_empty() {
+            tracing::debug!("Seed discovery: no skin BINs found in TOC (binless mod?)");
+        } else {
+            let unique_champs: std::collections::HashSet<&str> =
+                seeds.iter().map(|s| s.champion.as_str()).collect();
+            tracing::info!(
+                "Seed discovery: {} skin(s) across {} champion(s)",
+                seeds.len(),
+                unique_champs.len()
+            );
+            for seed in &seeds {
+                tracing::debug!("  seed → {} (skin{})", seed.champion, seed.skin_no);
+            }
+            if unique_champs.len() > 1 {
+                let mut names: Vec<&str> = unique_champs.iter().copied().collect();
+                names.sort();
+                ctx.ui.note(&format!(
+                    "WAD folder contains subchampion forms: {}",
+                    names.join(", ")
+                ));
+                tracing::info!(
+                    "WAD folder contains subchampion forms: {}",
+                    names.join(", ")
+                );
+            }
+        }
+    }
+
+    let mut total_result = ProcessResult::default();
+    let mut shared_files_to_remove = Vec::new();
+
+    // === WAD-LEVEL PIPELINE ===
+    ctx.ui.stage("Detecting WAD-level issues…");
+    tracing::debug!("Running WAD-level pipeline...");
+    let wad_output =
+        wad_pipeline::apply_wad_fixes(&all_files, config, selected_fixes, hash_provider.as_ref())?;
+
+    shared_files_to_remove.extend(wad_output.files_to_remove.clone());
+
+    for wad_fix in &wad_output.applied_fixes {
+        ctx.ui
+            .fix_applied(&wad_fix.fix_name, Some(wad_fix.files_affected));
+        tracing::info!(
+            "WAD-level fix '{}' affected {} files",
+            wad_fix.fix_name,
+            wad_fix.files_affected
+        );
+        total_result.fixes_applied += wad_fix.files_affected;
+    }
+
+    // Perform file format conversions
+    let mut converter_registry = ConverterRegistry::new();
+    converter_registry.register("dds_to_tex", texture_converter::dds_to_tex);
+    converter_registry.register("sco_to_scb", mesh_converter::sco_to_scb);
+    converter_registry.register(
+        "strip_mipmaps",
+        hematite_ltk::strip_mipmaps::strip_mipmaps_auto,
+    );
+    converter_registry.register(
+        "fix_tex_dims",
+        hematite_ltk::fix_dimensions::fix_dimensions_auto,
+    );
+
+    let mut conversion_count = 0u32;
+    if !wad_output.files_to_convert.is_empty() {
+        tracing::info!(
+            "Converting {} file formats...",
+            wad_output.files_to_convert.len()
+        );
+
+        for conversion in &wad_output.files_to_convert {
+            if let Some((hash, path, bytes)) =
+                all_files.iter_mut().find(|(_, p, _)| p == &conversion.path)
+            {
+                match converter_registry.convert(&conversion.converter, bytes) {
+                    Ok(converted_bytes) => {
+                        let old_size = bytes.len();
+                        *bytes = converted_bytes;
+                        conversion_count += 1;
+
+                        if conversion.from_ext != conversion.to_ext {
+                            let old_path = path.clone();
+                            let new_path = path.replace(&format!(".{}", conversion.from_ext), &format!(".{}", conversion.to_ext));
+                            *path = new_path.clone();
+                            *hash = wad_path_hash(&new_path);
+                            tracing::info!(
+                                "✓ Converted {} from .{} to .{} ({} → {} bytes) and renamed to {}",
+                                old_path,
+                                conversion.from_ext,
+                                conversion.to_ext,
+                                old_size,
+                                bytes.len(),
+                                new_path
+                            );
+                        } else {
+                            tracing::info!(
+                                "✓ Converted {} from .{} to .{} ({} → {} bytes)",
+                                conversion.path,
+                                conversion.from_ext,
+                                conversion.to_ext,
+                                old_size,
+                                bytes.len()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "✗ Converter '{}' failed for {}: {}",
+                            conversion.converter,
+                            conversion.path,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        total_result.fixes_applied += conversion_count;
+    }
+
+    // Perform in-place byte transforms
+    let mut transform_count = 0u32;
+    if !wad_output.files_to_transform.is_empty() {
+        tracing::info!(
+            "Applying {} in-place byte transforms...",
+            wad_output.files_to_transform.len()
+        );
+        for op in &wad_output.files_to_transform {
+            if let Some((_, _, bytes)) = all_files.iter_mut().find(|(_, p, _)| p == &op.path) {
+                match converter_registry.convert(&op.converter, bytes) {
+                    Ok(new_bytes) => {
+                        if new_bytes != *bytes {
+                            tracing::info!(
+                                "✓ Transformed {} via {} ({} → {} bytes)",
+                                op.path,
+                                op.converter,
+                                bytes.len(),
+                                new_bytes.len()
+                            );
+                            *bytes = new_bytes;
+                            transform_count += 1;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "✗ In-place transform '{}' failed for {}: {}",
+                            op.converter,
+                            op.path,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        total_result.fixes_applied += transform_count;
+    }
+
+    // Append injected files
+    let mut added_count = 0u32;
+    if !wad_output.files_to_add.is_empty() {
+        tracing::info!(
+            "Injecting {} fallback asset(s)...",
+            wad_output.files_to_add.len()
+        );
+        let mut paths_in_wad: std::collections::HashSet<String> =
+            all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
+        for addition in &wad_output.files_to_add {
+            let lower = addition.path.to_lowercase();
+            if addition.only_if_missing && paths_in_wad.contains(&lower) {
+                continue;
+            }
+            let Some(bytes) = hematite_core::assets::get(&addition.asset) else {
+                continue;
+            };
+            let hash = wad_path_hash(&addition.path);
+            all_files.push((hash, addition.path.clone(), bytes.to_vec()));
+            paths_in_wad.insert(lower);
+            added_count += 1;
+        }
+        total_result.fixes_applied += added_count;
+    }
+
+    // === LINKED BIN RESOLUTION (BFS) ===
+    let mut parsed_bins: std::collections::HashMap<String, hematite_types::bin::BinTree> =
+        std::collections::HashMap::new();
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+
+    for (_hash, path, bytes) in &bin_chunks {
+        match bin_provider.parse_bytes(bytes) {
+            Ok(tree) => {
+                for linked_path in &tree.linked {
+                    if !parsed_bins.contains_key(linked_path) {
+                        queue.push_back(linked_path.clone());
+                    }
+                }
+                parsed_bins.insert(path.clone(), tree);
+            }
+            Err(e) => {
+                tracing::debug!("Failed to parse BIN {path}: {e}");
+            }
+        }
+    }
+
+    while let Some(linked_path) = queue.pop_front() {
+        if parsed_bins.contains_key(&linked_path) {
+            continue;
+        }
+        if let Some((_, _, bytes)) = all_files.iter().find(|(_, p, _)| *p == linked_path) {
+            match bin_provider.parse_bytes(bytes) {
+                Ok(tree) => {
+                    for dep in &tree.linked {
+                        if !parsed_bins.contains_key(dep) {
+                            queue.push_back(dep.clone());
+                        }
+                    }
+                    parsed_bins.insert(linked_path, tree);
+                }
+                Err(e) => {
+                    tracing::debug!("Failed to parse linked BIN {}: {}", linked_path, e);
+                }
+            }
+        }
+    }
+
+    let primary_bin_paths: std::collections::HashSet<String> =
+        bin_chunks.iter().map(|(_, p, _)| p.clone()).collect();
+    let linked_only: std::collections::HashMap<String, hematite_types::bin::BinTree> = parsed_bins
+        .iter()
+        .filter(|(k, _)| !primary_bin_paths.contains(*k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    // === BIN-LEVEL PIPELINE ===
+    let shader_validator = hematite_core::detect::shader::ShaderValidator::load()
+        .ok()
+        .filter(|v| v.is_available());
+
+    let ui = ctx.ui.clone();
+    ui.stage("Applying fixes…");
+    ui.set_length(bin_chunks.len() as u64);
+
+    for (_, path, _) in &bin_chunks {
+        let Some(tree) = parsed_bins.remove(path) else {
+            ui.tick();
+            continue;
+        };
+
+        let mut ctx = FixContext {
+            tree,
+            hashes: hash_provider.as_ref(),
+            wad: &wad_provider,
+            champions,
+            files_to_remove: Vec::new(),
+            file_path: path.clone(),
+            linked_trees: linked_only.clone(),
+            shader_validator: shader_validator.as_ref(),
+            additional_bins: Vec::new(),
+        };
+
+        let result = apply_fixes(&mut ctx, config, selected_fixes, dry_run);
+
+        if result.fixes_applied > 0 {
+            for fix in &result.applied_fixes {
+                ui.fix_applied(&fix.fix_name, Some(fix.changes_count));
+            }
+        }
+        ui.tick();
+
+        let fixes_applied = result.fixes_applied;
+        total_result.merge(result);
+
+        if !dry_run && fixes_applied > 0 {
+            match bin_provider.write_bytes(&ctx.tree) {
+                Ok(modified_bytes) => {
+                    if let Some((_, _, file_bytes)) =
+                        all_files.iter_mut().find(|(_, p, _)| p == path)
+                    {
+                        *file_bytes = modified_bytes;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to write modified BIN {}: {}", path, e);
+                }
+            }
+        }
+
+        shared_files_to_remove.extend(ctx.files_to_remove);
+
+        if !dry_run && !ctx.additional_bins.is_empty() {
+            for (new_path, new_tree) in &ctx.additional_bins {
+                match bin_provider.write_bytes(new_tree) {
+                    Ok(bytes) => {
+                        let hash = wad_path_hash(new_path);
+                        if let Some((_, _, existing)) =
+                            all_files.iter_mut().find(|(h, _, _)| *h == hash)
+                        {
+                            *existing = bytes;
+                        } else {
+                            all_files.push((hash, new_path.clone(), bytes));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to serialize split-BIN output {}: {}", new_path, e);
+                    }
+                }
+            }
+        }
+    }
+
+    total_result.files_removed = shared_files_to_remove.len() as u32;
+
+    // === REPATH PIPELINE ===
+    if let Some(opts) = repath_opts {
+        if !dry_run {
+            ui.stage(&format!("Repathing assets (prefix “{}”)…", opts.prefix));
+            let mut game_files_added = 0u32;
+            if let Some(ref game_wad_path) = opts.game_wad {
+                game_files_added = extract_missing_from_game_wad(
+                    game_wad_path,
+                    &mut all_files,
+                    &bin_provider,
+                    hash_provider.as_ref(),
+                    opts,
+                )?;
+            }
+
+            let index = repath_core::WadIndex::from_entries(
+                all_files.iter().map(|(h, p, _)| (*h, p.clone())),
+            );
+
+            let mut combined_mapping: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            let mut repath_bin_count = 0u32;
+            let mut bins_touched = 0u32;
+
+            for (_h, path, bytes) in all_files.iter_mut() {
+                let is_bin =
+                    path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
+                if !is_bin {
+                    continue;
+                }
+                let mut tree = match bin_provider.parse_bytes(bytes) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::debug!("Skipping BIN at {}: parse failed: {}", path, e);
+                        continue;
+                    }
+                };
+                let r = repath_core::repath_bin_strings(&mut tree, opts, &index, wad_path_hash);
+                if r.strings_repathed == 0 {
+                    continue;
+                }
+                match bin_provider.write_bytes(&tree) {
+                    Ok(new_bytes) => {
+                        repath_bin_count += r.strings_repathed;
+                        bins_touched += 1;
+                        for (k, v) in r.mapping {
+                            combined_mapping.entry(k).or_insert(v);
+                        }
+                        *bytes = new_bytes;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to write repathed BIN {}: {}", path, e)
+                    }
+                }
+            }
+
+            let hash_mapping: std::collections::HashMap<u64, String> = combined_mapping
+                .iter()
+                .map(|(orig, new)| (wad_path_hash(orig), new.clone()))
+                .collect();
+
+            let mut repath_wad_count = 0u32;
+            let mut new_path_set: Vec<String> = Vec::new();
+            let mut seen_dest: std::collections::HashMap<String, u32> =
+                std::collections::HashMap::new();
+
+            let repathed: Vec<(u64, String, Vec<u8>)> = all_files
+                .drain(..)
+                .map(|(hash, path, bytes)| {
+                    let lower = path.to_lowercase();
+
+                    let new_path_opt: Option<String> = combined_mapping
+                        .get(&lower)
+                        .cloned()
+                        .or_else(|| hash_mapping.get(&hash).cloned())
+                        .or_else(|| repath_core::repath_wad_path(&path, &opts.prefix, opts.layout));
+
+                    let final_path = match new_path_opt {
+                        Some(np) => {
+                            let np_lower = np.to_lowercase();
+                            let suffix = seen_dest
+                                .entry(np_lower.clone())
+                                .and_modify(|c| *c += 1)
+                                .or_insert(0);
+                            if *suffix == 0 {
+                                np
+                            } else if let Some(dot) = np.rfind('.') {
+                                format!("{}_{}{}", &np[..dot], suffix, &np[dot..])
+                            } else {
+                                format!("{}_{}", np, suffix)
+                            }
+                        }
+                        None => path.clone(),
+                    };
+
+                    if final_path != path {
+                        repath_wad_count += 1;
+                        new_path_set.push(final_path.to_lowercase());
+                        let new_hash = wad_path_hash(&final_path);
+                        (new_hash, final_path, bytes)
+                    } else {
+                        (hash, path, bytes)
+                    }
+                })
+                .collect();
+            all_files = repathed;
+
+            tracing::info!(
+                "  {} string(s) in {} BIN(s) repathed; {} WAD entry/entries renamed; \
+                 {} pulled from game WAD",
+                repath_bin_count,
+                bins_touched,
+                repath_wad_count,
+                game_files_added
+            );
+
+            if repath_bin_count == 0 && repath_wad_count == 0 {
+                // Warning
+            } else {
+                total_result.fixes_applied += 1;
+            }
+
+            if opts.invis_texture && !new_path_set.is_empty() {
+                let existing: std::collections::HashSet<String> =
+                    all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
+                let placeholders =
+                    repath_core::missing_invis_placeholders(&existing, &new_path_set);
+                if !placeholders.is_empty() {
+                    for (path, bytes) in placeholders {
+                        let hash = wad_path_hash(&path);
+                        all_files.push((hash, path, bytes));
+                    }
+                }
+            }
+        }
+    }
+
+    if check {
+        use hematite_core::detect::skin::SkinDetector;
+
+        let all_paths: Vec<String> = all_files.iter().map(|(_, p, _)| p.clone()).collect();
+        let detector = SkinDetector::new();
+        let skin_info = detector.detect_from_paths(&all_paths);
+
+        let detected: Vec<String> = total_result
+            .applied_fixes
+            .iter()
+            .map(|f| f.fix_name.clone())
+            .collect();
+
+        let skin_number = skin_info.primary_skin();
+        let is_binless = skin_info.is_binless;
+        let champion = if skin_info.champion.is_empty() {
+            None
+        } else {
+            Some(skin_info.champion)
+        };
+
+        total_result.check_info = Some(CheckInfo {
+            champion,
+            skin_number,
+            is_binless,
+            detected_issues: detected,
+        });
+    }
+
+    // === WAD FOLDER WRITING ===
+    if !dry_run && (total_result.fixes_applied > 0 || !shared_files_to_remove.is_empty()) {
+        ui.stage("Updating WAD folder…");
+        tracing::info!("Writing modified WAD folder...");
+
+        let output_path = folder.with_extension("fixed.wad.client");
+        std::fs::create_dir_all(&output_path).context("Failed to create output WAD folder")?;
+
+        let mut files_written = 0;
+        for (_, path, bytes) in &all_files {
+            if !shared_files_to_remove.contains(path) {
+                let dest_file_path = output_path.join(path);
+                if let Some(parent) = dest_file_path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .context("Failed to create parent directory for file in WAD folder")?;
+                }
+                std::fs::write(&dest_file_path, bytes)
+                    .context("Failed to write file in WAD folder")?;
+                files_written += 1;
+            }
+        }
+
+        let is_intermediate = output_path.starts_with(std::env::temp_dir());
+        if !is_intermediate {
+            ui.fix_applied(&format!("Wrote WAD folder {}", output_path.display()), None);
+        }
+        tracing::info!("✓ Wrote fixed WAD folder to: {}", output_path.display());
+        tracing::info!(
+            "  {} files written, {} files removed",
+            files_written,
+            shared_files_to_remove.len()
+        );
+    } else if !dry_run {
+        ui.note("No changes detected — WAD folder not modified.");
+        tracing::info!("No changes detected - WAD folder not modified");
     }
 
     Ok(total_result)
@@ -1037,13 +1655,13 @@ fn process_fantome_file(
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(zip_file))
         .context("Failed to read ZIP archive")?;
 
-    // Extract .wad.client files to temp dir
+    // Extract .wad.client files/folders to temp dir
     let temp_dir = tempfile::tempdir().context("Failed to create temp directory")?;
 
     // SECURITY: Limits to prevent DoS attacks (ZIP bombs, memory exhaustion)
-    const MAX_ENTRIES: usize = 1000;
-    const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024; // 500MB per file
-    const MAX_TOTAL_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2GB total
+    const MAX_ENTRIES: usize = 5000;
+    const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024; // 1GB per file
+    const MAX_TOTAL_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB total
 
     if archive.len() > MAX_ENTRIES {
         anyhow::bail!(
@@ -1055,15 +1673,18 @@ fn process_fantome_file(
 
     let mut total_extracted_size: u64 = 0;
     let mut wad_paths = Vec::new();
+    let mut wad_folders = std::collections::HashSet::new();
+
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).context("Failed to read ZIP entry")?;
+        let entry_name = entry.name();
+        let name = entry_name.to_lowercase();
 
-        let name = entry.name().to_lowercase();
-        if name.ends_with(".wad.client") {
+        let is_wad_file = name.ends_with(".wad.client");
+        let wad_folder_key = get_wad_folder_key(entry_name);
+
+        if is_wad_file || wad_folder_key.is_some() {
             // SECURITY: Validate ZIP entry path to prevent path traversal attacks
-            let entry_name = entry.name();
-
-            // Check for path traversal patterns
             if entry_name.contains("..") || std::path::Path::new(entry_name).is_absolute() {
                 anyhow::bail!(
                     "Invalid ZIP entry path (potential path traversal): {}",
@@ -1071,7 +1692,6 @@ fn process_fantome_file(
                 );
             }
 
-            // Additional check: ensure no path component is exactly ".."
             if entry_name.split('/').any(|component| component == "..")
                 || entry_name.split('\\').any(|component| component == "..")
             {
@@ -1107,22 +1727,44 @@ fn process_fantome_file(
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let mut out = std::fs::File::create(&dest)?;
-            std::io::copy(&mut entry, &mut out)?;
-            wad_paths.push(dest);
+
+            if entry.is_dir() {
+                std::fs::create_dir_all(&dest)?;
+            } else {
+                let mut out = std::fs::File::create(&dest)?;
+                std::io::copy(&mut entry, &mut out)?;
+            }
+
+            if is_wad_file {
+                wad_paths.push(dest);
+            } else if let Some(key) = wad_folder_key {
+                let folder_dest = temp_dir.path().join(key);
+                wad_folders.insert(folder_dest);
+            }
         }
     }
 
-    if wad_paths.is_empty() {
-        tracing::warn!("No .wad.client files found in {}", file.display());
+    if wad_paths.is_empty() && wad_folders.is_empty() {
+        tracing::warn!(
+            "No .wad.client files or folders found in {}",
+            file.display()
+        );
         return Ok(ProcessResult::default());
     }
 
-    tracing::info!("Found {} WAD file(s) in archive", wad_paths.len());
+    tracing::info!(
+        "Found {} WAD file(s) and {} WAD folder(s) in archive",
+        wad_paths.len(),
+        wad_folders.len()
+    );
 
     let mut total_result = ProcessResult::default();
     for wad_path in &wad_paths {
         let result = process_wad_file(wad_path, ctx, hash_provider)?;
+        total_result.merge(result);
+    }
+    for wad_folder_path in &wad_folders {
+        let result = process_wad_folder(wad_folder_path, ctx, hash_provider)?;
         total_result.merge(result);
     }
 
@@ -1136,9 +1778,8 @@ fn process_fantome_file(
         // Re-open the original ZIP to copy non-WAD entries
         let original_zip_file =
             std::fs::File::open(file).context("Failed to re-open original fantome")?;
-        let mut original_archive =
-            zip::ZipArchive::new(std::io::BufReader::new(original_zip_file))
-                .context("Failed to re-read original ZIP")?;
+        let mut original_archive = zip::ZipArchive::new(std::io::BufReader::new(original_zip_file))
+            .context("Failed to re-read original ZIP")?;
 
         let output_file =
             std::fs::File::create(&output_path).context("Failed to create output fantome")?;
@@ -1147,10 +1788,13 @@ fn process_fantome_file(
         let zip_options =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
+        let mut written_fixed_folders = std::collections::HashSet::new();
+
         for i in 0..original_archive.len() {
             let mut entry = original_archive.by_index(i)?;
             let entry_name = entry.name().to_string();
             let is_wad = entry_name.to_lowercase().ends_with(".wad.client");
+            let wad_folder_key = get_wad_folder_key(&entry_name);
 
             if is_wad {
                 // Use the fixed WAD if it exists, otherwise copy original
@@ -1171,6 +1815,21 @@ fn process_fantome_file(
                     std::io::copy(&mut entry, &mut zip_writer)?;
                     tracing::debug!("Repacked original WAD: {}", entry_name);
                 }
+            } else if let Some(key) = wad_folder_key {
+                let fixed_folder_path = temp_dir
+                    .path()
+                    .join(&key)
+                    .with_extension("fixed.wad.client");
+
+                if fixed_folder_path.exists() {
+                    written_fixed_folders.insert((key, fixed_folder_path));
+                    tracing::debug!("Skipping original WAD folder entry: {}", entry_name);
+                } else {
+                    // No fixes applied to this WAD folder, copy original
+                    zip_writer.start_file(&entry_name, zip_options)?;
+                    std::io::copy(&mut entry, &mut zip_writer)?;
+                    tracing::debug!("Repacked original WAD folder entry: {}", entry_name);
+                }
             } else {
                 // Copy non-WAD entries as-is (META/info.json, etc.)
                 zip_writer.start_file(&entry_name, zip_options)?;
@@ -1178,12 +1837,32 @@ fn process_fantome_file(
             }
         }
 
+        // Now, write all the files for each fixed WAD folder!
+        for (key, fixed_folder_path) in written_fixed_folders {
+            tracing::debug!("Writing fixed WAD folder: {}", key);
+            for entry in WalkDir::new(&fixed_folder_path) {
+                let entry = entry.context("Failed to read entry from fixed WAD folder")?;
+                let path = entry.path();
+                if path.is_file() {
+                    let rel_path = path
+                        .strip_prefix(&fixed_folder_path)
+                        .context("Failed to strip prefix from fixed WAD folder path")?;
+                    let rel_path_str = rel_path.to_string_lossy().replace('\\', "/");
+                    let entry_name = format!("{}/{}", key, rel_path_str).replace('\\', "/");
+
+                    let bytes =
+                        std::fs::read(path).context("Failed to read file in fixed WAD folder")?;
+                    zip_writer.start_file(&entry_name, zip_options)?;
+                    std::io::Write::write_all(&mut zip_writer, &bytes)?;
+                    tracing::debug!("Repacked fixed WAD folder file: {}", entry_name);
+                }
+            }
+        }
+
         zip_writer.finish()?;
 
-        ctx.ui.fix_applied(
-            &format!("Wrote {}", output_path.display()),
-            None,
-        );
+        ctx.ui
+            .fix_applied(&format!("Wrote {}", output_path.display()), None);
         tracing::info!("✓ Wrote fixed fantome to: {}", output_path.display());
         tracing::info!("  {} total fixes applied", total_result.fixes_applied);
     } else if !dry_run {
@@ -1220,8 +1899,7 @@ fn extract_missing_from_game_wad(
     //    Identify BINs by extension OR magic so unresolved entries are caught.
     let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (_, path, bytes) in all_files.iter() {
-        let is_bin =
-            path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
+        let is_bin = path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
         if !is_bin {
             continue;
         }
@@ -1232,9 +1910,8 @@ fn extract_missing_from_game_wad(
     }
 
     // 2. Build a path+hash index of what the mod already ships.
-    let mod_index = repath_core::WadIndex::from_entries(
-        all_files.iter().map(|(h, p, _)| (*h, p.clone())),
-    );
+    let mod_index =
+        repath_core::WadIndex::from_entries(all_files.iter().map(|(h, p, _)| (*h, p.clone())));
 
     // 3. Determine which referenced paths are missing (alternates + hash).
     let missing: Vec<String> = referenced

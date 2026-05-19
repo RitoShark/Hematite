@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -797,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "hematite-types",
@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-ltk"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "glam",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-types"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "indexmap",
  "serde",

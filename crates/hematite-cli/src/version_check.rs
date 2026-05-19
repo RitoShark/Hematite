@@ -378,9 +378,7 @@ pub fn report(outcome: &CheckOutcome, skip_check: bool) -> bool {
                 );
                 false
             } else {
-                eprintln!(
-                    "  Pass --skip-version-check to override at your own risk."
-                );
+                eprintln!("  Pass --skip-version-check to override at your own risk.");
                 true
             }
         }
@@ -412,9 +410,8 @@ fn trim_notes(notes: &str) -> String {
 pub fn clear_cache() -> Result<()> {
     let path = cache_file()?;
     if path.exists() {
-        fs::remove_file(&path).with_context(|| {
-            format!("Failed to remove version cache: {}", path.display())
-        })?;
+        fs::remove_file(&path)
+            .with_context(|| format!("Failed to remove version cache: {}", path.display()))?;
     }
     Ok(())
 }
