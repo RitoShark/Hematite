@@ -1,13 +1,13 @@
-//! BIN parsing adapter using ltk_meta.
+//! BIN parsing adapter using rs_bin.
 
 use crate::convert::ltk_tree_to_hematite;
 use anyhow::Result;
 use hematite_core::traits::BinProvider;
 use hematite_types::bin::BinTree;
-use league_toolkit::meta::Bin as LtkBin;
-use std::io::Cursor;
+use rs_bin::Bin as RsBin;
+use rs_io::{Parse, Serialize};
 
-/// BIN provider backed by league-toolkit's ltk_meta.
+/// BIN provider backed by rs_bin.
 pub struct LtkBinProvider;
 
 impl LtkBinProvider {
@@ -24,24 +24,19 @@ impl Default for LtkBinProvider {
 
 impl BinProvider for LtkBinProvider {
     fn parse_bytes(&self, data: &[u8]) -> Result<BinTree> {
-        let mut cursor = Cursor::new(data);
-        let ltk_tree = LtkBin::from_reader(&mut cursor)
+        let rs_bin = RsBin::from_bytes(data)
             .map_err(|e| anyhow::anyhow!("Failed to parse BIN: {:?}", e))?;
-        ltk_tree_to_hematite(ltk_tree)
+        ltk_tree_to_hematite(rs_bin)
     }
 
     fn write_bytes(&self, tree: &BinTree) -> Result<Vec<u8>> {
         use crate::convert::hematite_tree_to_ltk;
 
-        let ltk_tree = hematite_tree_to_ltk(tree)?;
+        let rs_bin = hematite_tree_to_ltk(tree)?;
 
-        let mut buffer = Vec::new();
-        let mut cursor = Cursor::new(&mut buffer);
-        ltk_tree
-            .to_writer(&mut cursor)
-            .map_err(|e| anyhow::anyhow!("Failed to write BIN: {:?}", e))?;
-
-        Ok(buffer)
+        rs_bin
+            .to_bytes()
+            .map_err(|e| anyhow::anyhow!("Failed to write BIN: {:?}", e))
     }
 }
 

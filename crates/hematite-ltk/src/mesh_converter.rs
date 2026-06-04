@@ -1,9 +1,9 @@
-//! SCO ↔ SCB mesh format conversion using LTK.
+//! SCO ↔ SCB mesh format conversion using rs_mesh.
 //!
 //! Converts between League's ASCII (.sco) and binary (.scb) static mesh formats.
 
 use anyhow::{Context, Result};
-use std::io::{BufReader, Cursor};
+use rs_io::{Parse, Serialize};
 
 /// Convert SCO (ASCII) static mesh to SCB (binary) format.
 ///
@@ -21,28 +21,26 @@ use std::io::{BufReader, Cursor};
 ///
 /// This is a **lossless** conversion (both formats store the same data).
 pub fn sco_to_scb(sco_bytes: &[u8]) -> Result<Vec<u8>> {
-    use league_toolkit::mesh::StaticMesh;
+    use rs_mesh::StaticMesh;
 
-    // Parse SCO (ASCII format)
-    let mut reader = BufReader::new(Cursor::new(sco_bytes));
-    let mesh = StaticMesh::from_ascii(&mut reader).context("Failed to parse SCO file")?;
+    // Parse the static mesh. `StaticMesh::from_bytes` auto-detects the ASCII
+    // `.sco` (`[Object...`) and binary `.scb` (`r3d2Mesh`) forms.
+    let mesh = StaticMesh::from_bytes(sco_bytes).context("Failed to parse SCO file")?;
 
     tracing::debug!(
-        "Converting SCO→SCB: mesh '{}', {} vertices, {} faces",
+        "Converting SCO→SCB: mesh '{}', {} positions, {} faces",
         mesh.name(),
-        mesh.vertices().len(),
+        mesh.positions().len(),
         mesh.faces().len()
     );
 
-    // Serialize to SCB (binary format)
-    let mut output = Vec::new();
-    mesh.to_writer(&mut output)
-        .context("Failed to write SCB data")?;
+    // Serialize to SCB (binary format) — rs_mesh's `Serialize` emits binary.
+    let output = mesh.to_bytes().context("Failed to write SCB data")?;
 
     tracing::info!(
-        "Converted SCO→SCB: mesh '{}', {} vertices, {} faces, {} bytes → {} bytes",
+        "Converted SCO→SCB: mesh '{}', {} positions, {} faces, {} bytes → {} bytes",
         mesh.name(),
-        mesh.vertices().len(),
+        mesh.positions().len(),
         mesh.faces().len(),
         sco_bytes.len(),
         output.len()
@@ -56,40 +54,14 @@ pub fn sco_to_scb(sco_bytes: &[u8]) -> Result<Vec<u8>> {
 /// Reads a binary static mesh file (.scb) and converts it to the ASCII
 /// format (.sco) used for editing and version control.
 ///
-/// ## Process
-/// 1. Parse binary .scb file → StaticMesh
-/// 2. Serialize StaticMesh → ASCII .sco bytes
-///
-/// This is a **lossless** conversion (both formats store the same data).
-pub fn scb_to_sco(scb_bytes: &[u8]) -> Result<Vec<u8>> {
-    use league_toolkit::mesh::StaticMesh;
-
-    // Parse SCB (binary format)
-    let mut cursor = Cursor::new(scb_bytes);
-    let mesh = StaticMesh::from_reader(&mut cursor).context("Failed to parse SCB file")?;
-
-    tracing::debug!(
-        "Converting SCB→SCO: mesh '{}', {} vertices, {} faces",
-        mesh.name(),
-        mesh.vertices().len(),
-        mesh.faces().len()
-    );
-
-    // Serialize to SCO (ASCII format)
-    let mut output = Vec::new();
-    mesh.to_ascii(&mut output)
-        .context("Failed to write SCO data")?;
-
-    tracing::info!(
-        "Converted SCB→SCO: mesh '{}', {} vertices, {} faces, {} bytes → {} bytes",
-        mesh.name(),
-        mesh.vertices().len(),
-        mesh.faces().len(),
-        scb_bytes.len(),
-        output.len()
-    );
-
-    Ok(output)
+/// ## Limitation
+/// rs_mesh does **not** provide an ASCII (`.sco`) writer — its `Serialize`
+/// impl only emits the binary `.scb` form (the text form was removed from the
+/// game and is no longer written). This direction is therefore unsupported and
+/// always returns an error. It is currently unused (only `sco_to_scb` is wired
+/// into the converter registry).
+pub fn scb_to_sco(_scb_bytes: &[u8]) -> Result<Vec<u8>> {
+    anyhow::bail!("SCB->SCO ascii export not supported by rs_mesh")
 }
 
 #[cfg(test)]

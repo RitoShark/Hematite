@@ -1,11 +1,11 @@
-//! WAD path lookup and chunk extraction using ltk_wad.
+//! WAD path lookup and chunk extraction using rs_wad.
 
 use anyhow::{Context, Result};
 use hematite_core::traits::{HashProvider, WadProvider};
 use hematite_types::hash::GameHash;
-use league_toolkit::wad::Wad;
+use rs_io::Parse;
+use rs_wad::Wad;
 use std::collections::HashSet;
-use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::Path;
 use xxhash_rust::xxh64::xxh64;
 
@@ -110,30 +110,25 @@ impl LtkWadProvider {
 
     /// Build from a WAD file on disk.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let file =
-            std::fs::File::open(path).with_context(|| format!("Failed to open WAD: {:?}", path))?;
-        let reader = BufReader::new(file);
-        Self::from_reader(reader)
+        let wad = Wad::from_path(path)
+            .with_context(|| format!("Failed to open WAD: {:?}", path))?;
+        Ok(Self::from_wad(&wad))
     }
 
     /// Build from raw WAD bytes.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let cursor = Cursor::new(data);
-        Self::from_reader(cursor)
+        let wad =
+            Wad::from_bytes(data).map_err(|e| anyhow::anyhow!("Failed to parse WAD: {:?}", e))?;
+        Ok(Self::from_wad(&wad))
     }
 
-    /// Internal: Build from any Read+Seek source.
-    fn from_reader<R: Read + Seek>(reader: R) -> Result<Self> {
-        let wad =
-            Wad::mount(reader).map_err(|e| anyhow::anyhow!("Failed to parse WAD: {:?}", e))?;
-
+    /// Internal: Build from a mounted WAD.
+    fn from_wad(wad: &Wad) -> Self {
         let mut provider = Self::new();
-
-        for chunk in wad.chunks() {
+        for chunk in &wad.chunks {
             provider.path_hashes.insert(chunk.path_hash);
         }
-
-        Ok(provider)
+        provider
     }
 
     /// Get total hash count.
@@ -162,33 +157,29 @@ impl WadProvider for LtkWadProvider {
 
 /// Opened WAD file with chunk extraction capabilities.
 ///
-/// Wraps the LTK `Wad` handle to support both path lookups (via `build_provider`)
-/// and reading individual chunks (for BIN extraction).
-pub struct WadFile<R: Read + Seek> {
-    wad: Wad<R>,
+/// Wraps the `rs_wad` `Wad` (which loads the whole archive into memory) to
+/// support both path lookups (via `build_provider`) and reading individual
+/// chunks (for BIN extraction).
+pub struct WadFile {
+    wad: Wad,
 }
 
-impl WadFile<BufReader<std::fs::File>> {
-    /// Open a WAD file from disk.
-    pub fn open(path: &Path) -> Result<Self> {
-        let file =
-            std::fs::File::open(path).with_context(|| format!("Failed to open WAD: {:?}", path))?;
-        let reader = BufReader::new(file);
-        let wad =
-            Wad::mount(reader).map_err(|e| anyhow::anyhow!("Failed to parse WAD: {:?}", e))?;
-        Ok(Self { wad })
-    }
-}
-
-impl<R: Read + Seek> WadFile<R> {
+impl WadFile {
     // SECURITY: Limits to prevent resource exhaustion from malicious WAD files
     const MAX_CHUNK_SIZE: u64 = 1024 * 1024 * 1024; // 1GB per chunk
     const MAX_TOTAL_EXTRACTED: u64 = 4 * 1024 * 1024 * 1024; // 4GB total
 
+    /// Open a WAD file from disk.
+    pub fn open(path: &Path) -> Result<Self> {
+        let wad =
+            Wad::from_path(path).with_context(|| format!("Failed to open WAD: {:?}", path))?;
+        Ok(Self { wad })
+    }
+
     /// Build an `LtkWadProvider` from this WAD's chunk list.
     pub fn build_provider(&self) -> LtkWadProvider {
         let mut provider = LtkWadProvider::new();
-        for chunk in self.wad.chunks() {
+        for chunk in &self.wad.chunks {
             provider.path_hashes.insert(chunk.path_hash);
         }
         provider
@@ -197,7 +188,7 @@ impl<R: Read + Seek> WadFile<R> {
     /// Set of every chunk's `path_hash`. Cheap snapshot, useful for
     /// suffix-stripped fallback resolution via [`resolve_wad_hash_for`].
     pub fn chunk_hash_set(&self) -> HashSet<u64> {
-        self.wad.chunks().iter().map(|c| c.path_hash).collect()
+        self.wad.chunks.iter().map(|c| c.path_hash).collect()
     }
 
     /// Extract a single chunk by its xxhash64 path hash.
@@ -205,7 +196,7 @@ impl<R: Read + Seek> WadFile<R> {
     /// Returns `Ok(None)` when the hash isn't present in the WAD. Honors
     /// the per-chunk size limit.
     pub fn extract_chunk_by_hash(&mut self, hash: u64) -> Result<Option<Vec<u8>>> {
-        let Some(chunk) = self.wad.chunks().get(hash).copied() else {
+        let Some(chunk) = self.wad.chunk_by_hash(hash).copied() else {
             return Ok(None);
         };
         let chunk_size = chunk.uncompressed_size as u64;
@@ -218,8 +209,8 @@ impl<R: Read + Seek> WadFile<R> {
             );
             return Ok(None);
         }
-        match self.wad.load_chunk_decompressed(&chunk) {
-            Ok(data) => Ok(Some(data.to_vec())),
+        match self.wad.chunk_data(&chunk) {
+            Ok(data) => Ok(Some(data)),
             Err(e) => {
                 tracing::warn!("Failed to extract chunk {:016x}: {e:?}", hash);
                 Ok(None)
@@ -260,7 +251,7 @@ impl<R: Read + Seek> WadFile<R> {
         // Collect BIN chunk info first (path_hash + resolved path)
         let bin_chunks: Vec<(u64, String)> = self
             .wad
-            .chunks()
+            .chunks
             .iter()
             .filter_map(|chunk| {
                 let path = hashes.resolve_game_path(GameHash(chunk.path_hash))?;
@@ -276,7 +267,7 @@ impl<R: Read + Seek> WadFile<R> {
         let mut total_extracted: u64 = 0;
 
         for (path_hash, path) in bin_chunks {
-            let Some(chunk) = self.wad.chunks().get(path_hash) else {
+            let Some(chunk) = self.wad.chunk_by_hash(path_hash) else {
                 continue;
             };
             let chunk = *chunk;
@@ -302,9 +293,9 @@ impl<R: Read + Seek> WadFile<R> {
                 );
             }
 
-            match self.wad.load_chunk_decompressed(&chunk) {
+            match self.wad.chunk_data(&chunk) {
                 Ok(data) => {
-                    results.push((path, data.to_vec()));
+                    results.push((path, data));
                 }
                 Err(e) => {
                     tracing::warn!("Failed to extract BIN chunk {path}: {e:?}");
@@ -326,7 +317,7 @@ impl<R: Read + Seek> WadFile<R> {
         // Collect all chunk info (path_hash + resolved path)
         let all_chunks: Vec<(u64, String)> = self
             .wad
-            .chunks()
+            .chunks
             .iter()
             .map(|chunk| {
                 // Try to resolve path from hash database
@@ -349,7 +340,7 @@ impl<R: Read + Seek> WadFile<R> {
         let mut total_extracted: u64 = 0;
 
         for (path_hash, path) in all_chunks {
-            let Some(chunk) = self.wad.chunks().get(path_hash) else {
+            let Some(chunk) = self.wad.chunk_by_hash(path_hash) else {
                 continue;
             };
             let chunk = *chunk;
@@ -375,10 +366,10 @@ impl<R: Read + Seek> WadFile<R> {
                 );
             }
 
-            match self.wad.load_chunk_decompressed(&chunk) {
+            match self.wad.chunk_data(&chunk) {
                 Ok(data) => {
                     // Store original hash + path + bytes
-                    results.push((path_hash, path, data.to_vec()));
+                    results.push((path_hash, path, data));
                 }
                 Err(e) => {
                     tracing::debug!("Failed to extract chunk {path}: {e:?}");
@@ -401,7 +392,7 @@ impl<R: Read + Seek> WadFile<R> {
         // Collect BNK chunk info first (path_hash + resolved path)
         let bnk_chunks: Vec<(u64, String)> = self
             .wad
-            .chunks()
+            .chunks
             .iter()
             .filter_map(|chunk| {
                 let path = hashes.resolve_game_path(GameHash(chunk.path_hash))?;
@@ -417,7 +408,7 @@ impl<R: Read + Seek> WadFile<R> {
         let mut total_extracted: u64 = 0;
 
         for (path_hash, path) in bnk_chunks {
-            let Some(chunk) = self.wad.chunks().get(path_hash) else {
+            let Some(chunk) = self.wad.chunk_by_hash(path_hash) else {
                 continue;
             };
             let chunk = *chunk;
@@ -443,9 +434,9 @@ impl<R: Read + Seek> WadFile<R> {
                 );
             }
 
-            match self.wad.load_chunk_decompressed(&chunk) {
+            match self.wad.chunk_data(&chunk) {
                 Ok(data) => {
-                    results.push((path, data.to_vec()));
+                    results.push((path, data));
                 }
                 Err(e) => {
                     tracing::warn!("Failed to extract BNK chunk {path}: {e:?}");

@@ -1,9 +1,8 @@
-//! DDS ↔ TEX texture format conversion using LTK.
+//! DDS ↔ TEX texture format conversion using rs_tex.
 //!
 //! Converts between Microsoft's DDS format and League's proprietary TEX format.
 
 use anyhow::{Context, Result};
-use std::io::Cursor;
 
 /// Convert DDS texture data to TEX format.
 ///
@@ -30,62 +29,49 @@ pub fn dds_to_tex(dds_bytes: &[u8]) -> Result<Vec<u8>> {
         return Ok(tex);
     }
 
-    tracing::warn!("Lossless DDS→TEX conversion failed, falling back to LTK decoder/encoder");
+    tracing::warn!("Lossless DDS→TEX conversion failed, falling back to rs_tex decoder/encoder");
 
-    use league_toolkit::texture::tex::{EncodeOptions, Format as TexFormat};
-    use league_toolkit::texture::{Dds, Tex};
+    use rs_io::Serialize;
+    use rs_tex::{read_dds_bytes, TexFormat, Texture};
 
-    // Parse DDS
-    let mut cursor = Cursor::new(dds_bytes);
-    let dds = Dds::from_reader(&mut cursor).context("Failed to parse DDS file")?;
+    // Decode the DDS to an RGBA image. (rs_tex's reader loses the source
+    // compression format, so we sniff the DDS header ourselves below.)
+    let rgba_image = read_dds_bytes(dds_bytes).context("Failed to decode DDS file")?;
 
-    tracing::debug!(
-        "Converting DDS: {}x{}, {} mipmaps",
-        dds.width(),
-        dds.height(),
-        dds.mip_count()
-    );
+    let width = rgba_image.width();
+    let height = rgba_image.height();
+    let mip_count = dds_header_mip_count(dds_bytes).unwrap_or(1);
+    let has_mipmaps = mip_count > 1;
 
-    // Decode first mipmap to RGBA
-    let surface = dds
-        .decode_mipmap(0)
-        .context("Failed to decode DDS mipmap")?;
+    tracing::debug!("Converting DDS: {}x{}, {} mipmaps", width, height, mip_count);
 
-    let rgba_image = surface
-        .into_image()
-        .context("Failed to convert surface to RGBA")?;
-
-    // Determine TEX format from DDS format
-    let tex_format = match detect_dds_format(&dds) {
-        DdsFormat::Bc1 => TexFormat::Bc1,
-        DdsFormat::Bc3 => TexFormat::Bc3,
-        DdsFormat::Bgra8 => TexFormat::Bgra8,
+    // Determine the output TEX format from the DDS header. rs_tex can only
+    // *encode* BC1/BC3/BC5/BC7, so an uncompressed BGRA8 source is built
+    // directly instead of going through `Texture::encode`.
+    let tex = match detect_dds_format(dds_bytes) {
+        DdsFormat::Bc1 => Texture::encode(&rgba_image, TexFormat::Bc1, has_mipmaps)
+            .context("Failed to encode TEX (BC1)")?,
+        DdsFormat::Bc3 => Texture::encode(&rgba_image, TexFormat::Bc3, has_mipmaps)
+            .context("Failed to encode TEX (BC3)")?,
+        DdsFormat::Bgra8 => Texture::from_rgba_bgra8(&rgba_image),
         DdsFormat::Unsupported => {
-            anyhow::bail!("Unsupported DDS format for conversion");
+            // Unknown compression — default to BC3, the safe lossy fallback.
+            Texture::encode(&rgba_image, TexFormat::Bc3, has_mipmaps)
+                .context("Failed to encode TEX (BC3 default)")?
         }
     };
 
-    tracing::debug!("Using TEX format: {:?}", tex_format);
+    tracing::debug!("Using TEX format: {:?}", tex.format);
 
-    // Encode as TEX
-    let has_mipmaps = dds.mip_count() > 1;
-    let mut options = EncodeOptions::new(tex_format);
-    if has_mipmaps {
-        options = options.with_mipmaps();
-    }
-
-    let tex = Tex::encode_rgba_image(&rgba_image, options).context("Failed to encode TEX")?;
-
-    // Serialize TEX to bytes
-    let mut output = Vec::new();
-    tex.write(&mut output).context("Failed to write TEX data")?;
+    // Serialize TEX to bytes.
+    let output = tex.to_bytes().context("Failed to write TEX data")?;
 
     tracing::info!(
         "Converted DDS→TEX (fallback): {}x{} ({:?}), {} mipmaps, {} bytes → {} bytes",
-        dds.width(),
-        dds.height(),
-        tex_format,
-        dds.mip_count(),
+        width,
+        height,
+        tex.format,
+        mip_count,
         dds_bytes.len(),
         output.len()
     );
@@ -283,51 +269,46 @@ enum DdsFormat {
     Unsupported,
 }
 
-/// Detect DDS compression format using size heuristics.
+/// Read the mip count from a DDS header, defaulting to `1` when absent.
+fn dds_header_mip_count(dds: &[u8]) -> Option<u32> {
+    if dds.len() < 128 || &dds[..4] != b"DDS " {
+        return None;
+    }
+    Some(u32::from_le_bytes(dds[28..32].try_into().ok()?).max(1))
+}
+
+/// Detect the DDS compression format directly from the DDS pixel-format header.
 ///
-/// Uses file size vs dimensions ratio to infer BC1/BC3/BGRA8 format.
-fn detect_dds_format(dds: &league_toolkit::texture::Dds) -> DdsFormat {
-    // Heuristic based on file size vs dimensions
-    // BC1: 0.5 bytes per pixel (8 bytes per 4x4 block)
-    // BC3: 1 byte per pixel (16 bytes per 4x4 block)
-    // BGRA8: 4 bytes per pixel
+/// Parses the FourCC / RGB-bit-count fields (the same span the lossless path
+/// reads) to choose the output TEX format. Unknown encodings fall back to
+/// [`DdsFormat::Unsupported`] (the caller then defaults to BC3).
+fn detect_dds_format(dds: &[u8]) -> DdsFormat {
+    if dds.len() < 128 || &dds[..4] != b"DDS " {
+        return DdsFormat::Unsupported;
+    }
 
-    let width = dds.width() as usize;
-    let height = dds.height() as usize;
-    let pixel_count = width * height;
-    let data_size = estimate_dds_data_size(dds);
+    let pf_flags = match dds[80..84].try_into() {
+        Ok(b) => u32::from_le_bytes(b),
+        Err(_) => return DdsFormat::Unsupported,
+    };
+    let four_cc = &dds[84..88];
+    let rgb_bit_count = match dds[88..92].try_into() {
+        Ok(b) => u32::from_le_bytes(b),
+        Err(_) => return DdsFormat::Unsupported,
+    };
 
-    let bytes_per_pixel = data_size as f32 / pixel_count as f32;
-
-    if bytes_per_pixel < 0.7 {
-        DdsFormat::Bc1
-    } else if bytes_per_pixel < 2.0 {
-        DdsFormat::Bc3
-    } else if bytes_per_pixel >= 3.5 {
+    if pf_flags & 0x4 != 0 {
+        // FOURCC compressed
+        match four_cc {
+            b"DXT1" => DdsFormat::Bc1,
+            b"DXT5" => DdsFormat::Bc3,
+            _ => DdsFormat::Unsupported,
+        }
+    } else if pf_flags & 0x40 != 0 && rgb_bit_count == 32 {
         DdsFormat::Bgra8
     } else {
         DdsFormat::Unsupported
     }
-}
-
-/// Estimate DDS data size (header size subtracted).
-fn estimate_dds_data_size(dds: &league_toolkit::texture::Dds) -> usize {
-    // DDS header is 128 bytes (4 magic + 124 header)
-    // This is a rough estimate
-    let width = dds.width() as usize;
-    let height = dds.height() as usize;
-    let mip_count = dds.mip_count() as usize;
-
-    // Calculate size for main texture + mipmaps
-    let mut total = 0;
-    for mip in 0..mip_count {
-        let mip_w = (width >> mip).max(1);
-        let mip_h = (height >> mip).max(1);
-        // Assume BC3 (16 bytes per 4x4 block) as rough estimate
-        total += (mip_w.div_ceil(4)) * (mip_h.div_ceil(4)) * 16;
-    }
-
-    total
 }
 
 #[cfg(test)]

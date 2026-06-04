@@ -1,6 +1,6 @@
 [package]
 name = "hematite-ltk"
-description = "LTK adapter — the ONLY crate that imports league-toolkit"
+description = "File-format adapter — the ONLY crate that imports the RitoShark file crates"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,20 +11,17 @@ hematite-core = { path = "../hematite-core" }
 anyhow = { workspace = true }
 indexmap = { workspace = true }
 
-# League file parsing — THIS IS THE ONLY CRATE THAT DEPENDS ON LTK
-# When LTK breaks its API, only this crate needs updating.
-# Using git version (latest commit ca8eff4) since crates.io is outdated
-league-toolkit = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "58e1c10e4c95bf2d05d1f3036bc595dd11189448", features = ["wad", "meta", "texture", "mesh"] }
+# League file parsing — THIS IS THE ONLY CRATE THAT DEPENDS ON THE RITOSHARK CRATES.
+# When the file-format crates break their API, only this crate needs updating.
+# Using git versions (pinned rev) to match the project's CI convention.
+rs_io = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "c6a7325" }
+rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "c6a7325" }
+rs_wad = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "c6a7325" }
+rs_tex = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "c6a7325" }
+rs_mesh = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "c6a7325" }
 
-# Direct ltk_texture dependency to enable BC1/BC3 encoding (intel-tex feature)
-# This enables DDS→TEX conversion with compression support
-ltk_texture = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "58e1c10e4c95bf2d05d1f3036bc595dd11189448", features = ["intel-tex"] }
-
-# Primitive types for Color, etc.
-ltk_primitives = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "58e1c10e4c95bf2d05d1f3036bc595dd11189448" }
-
-# Math types (must match LTK's glam version: 0.27)
-glam = "0.27"
+# Image type shared with rs_tex's encode/decode API.
+image = { version = "0.25", default-features = false }
 
 # Hashing (for WAD path hashing)
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
