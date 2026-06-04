@@ -942,7 +942,7 @@ fn process_wad_file(
                 let existing: std::collections::HashSet<String> =
                     all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
                 let placeholders =
-                    repath_core::missing_invis_placeholders(&existing, &new_path_set);
+                    repath_core::missing_placeholders(&existing, &new_path_set, &opts.placeholder_rules);
                 if !placeholders.is_empty() {
                     tracing::info!("  Injecting {} invis placeholder(s)...", placeholders.len());
                     for (path, bytes) in placeholders {
@@ -1560,7 +1560,7 @@ fn process_wad_folder(
                 let existing: std::collections::HashSet<String> =
                     all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
                 let placeholders =
-                    repath_core::missing_invis_placeholders(&existing, &new_path_set);
+                    repath_core::missing_placeholders(&existing, &new_path_set, &opts.placeholder_rules);
                 if !placeholders.is_empty() {
                     for (path, bytes) in placeholders {
                         let hash = wad_path_hash(&path);
@@ -1885,13 +1885,13 @@ fn extract_missing_from_game_wad(
     game_wad_path: &Path,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,
     bin_provider: &LtkBinProvider,
-    hash_provider: &dyn HashProvider,
+    _hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<u32> {
     use hematite_ltk::wad_adapter::WadFile;
 
     tracing::info!(
-        "Opening game WAD for missing file extraction: {}",
+        "Opening game WAD for missing file extraction (lazy mode): {}",
         game_wad_path.display()
     );
 
@@ -1925,50 +1925,51 @@ fn extract_missing_from_game_wad(
     }
 
     tracing::info!(
-        "  {} referenced file(s) missing from mod, extracting from game WAD...",
+        "  {} referenced file(s) missing from mod, checking game WAD...",
         missing.len()
     );
 
-    // 4. Open game WAD and build a hash→path lookup for extraction.
+    // 4. Open game WAD lazily.
     let mut game_wad = WadFile::open(game_wad_path)
         .with_context(|| format!("Failed to open game WAD: {}", game_wad_path.display()))?;
 
-    let game_files = game_wad
-        .extract_all_files(hash_provider)
-        .context("Failed to extract game WAD")?;
+    let game_hashes = game_wad.chunk_hash_set();
 
-    // Build lowercased path → index lookup for the game WAD
-    let game_lookup: std::collections::HashMap<String, usize> = game_files
-        .iter()
-        .enumerate()
-        .map(|(i, (_, p, _))| (p.to_lowercase(), i))
-        .collect();
-
-    // 5. Pull each missing file from the game WAD.
+    // 5. Pull each missing file from the game WAD lazily.
     let mut added = 0u32;
     for missing_path in &missing {
-        // Try exact match first, then extension alternates
-        let found_idx = game_lookup.get(missing_path).copied().or_else(|| {
-            // .dds ↔ .tex
-            if let Some(stem) = missing_path.strip_suffix(".dds") {
-                game_lookup.get(&format!("{}.tex", stem)).copied()
-            } else if let Some(stem) = missing_path.strip_suffix(".tex") {
-                game_lookup.get(&format!("{}.dds", stem)).copied()
-            } else if let Some(stem) = missing_path.strip_suffix(".sco") {
-                game_lookup.get(&format!("{}.scb", stem)).copied()
-            } else if let Some(stem) = missing_path.strip_suffix(".scb") {
-                game_lookup.get(&format!("{}.sco", stem)).copied()
-            } else {
-                None
-            }
-        });
+        let mut candidates = vec![missing_path.clone()];
+        if let Some(stem) = missing_path.strip_suffix(".dds") {
+            candidates.push(format!("{}.tex", stem));
+        } else if let Some(stem) = missing_path.strip_suffix(".tex") {
+            candidates.push(format!("{}.dds", stem));
+        } else if let Some(stem) = missing_path.strip_suffix(".sco") {
+            candidates.push(format!("{}.scb", stem));
+        } else if let Some(stem) = missing_path.strip_suffix(".scb") {
+            candidates.push(format!("{}.sco", stem));
+        }
 
-        if let Some(idx) = found_idx {
-            let (hash, path, bytes) = &game_files[idx];
-            all_files.push((*hash, path.clone(), bytes.clone()));
-            added += 1;
-            tracing::debug!("  + pulled from game: {}", path);
-        } else {
+        let mut pulled = false;
+        for candidate in candidates {
+            let bin_hash = wad_path_hash(&candidate);
+            if let Some(resolved_hash) = hematite_ltk::wad_adapter::resolve_wad_hash_for(&candidate, bin_hash, &game_hashes) {
+                match game_wad.extract_chunk_by_hash(resolved_hash) {
+                    Ok(Some(bytes)) => {
+                        all_files.push((bin_hash, candidate.clone(), bytes));
+                        added += 1;
+                        pulled = true;
+                        tracing::debug!("  + pulled from game: {}", candidate);
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!("Failed to extract game WAD chunk for {}: {}", candidate, e);
+                    }
+                }
+            }
+        }
+
+        if !pulled {
             tracing::debug!("  - not found in game WAD: {}", missing_path);
         }
     }

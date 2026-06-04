@@ -18,6 +18,7 @@
 
 pub mod change_type;
 pub mod ensure_field;
+pub mod merge_linked;
 pub mod regex_ops;
 pub mod remove;
 pub mod remove_unreferenced;
@@ -110,5 +111,6 @@ pub fn apply_transform(
             output_path_template,
             link_in_source,
         } => split_entries::apply(ctx, entry_types, output_path_template, *link_in_source),
+        TransformAction::MergeLinkedBins => merge_linked::apply(ctx),
     }
 }

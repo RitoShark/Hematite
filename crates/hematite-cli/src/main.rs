@@ -155,6 +155,8 @@ fn detect_entry_mode(raw: &[String]) -> EntryMode {
 /// flow, the interactive menu, and the drag-drop fast path all
 /// converge here so behaviour stays consistent.
 pub fn run_with_cli(cli: Cli) -> Result<()> {
+    register_deep_repair_assets();
+
     // Initialize logging
     logging::init(&cli.verbosity, cli.json);
 
@@ -260,6 +262,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             opts.invis_texture = cli.invis_texture || cfg.invis_texture;
             opts.skip_vo = cfg.skip_vo;
             opts.game_wad = cli.game_wad.clone();
+            opts.placeholder_rules = cfg.placeholder_rules.clone();
             Some(opts)
         } else {
             None
@@ -301,6 +304,15 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
     } else {
         anyhow::bail!("Processing completed with {} error(s)", result.errors.len());
     }
+}
+
+fn register_deep_repair_assets() {
+    hematite_core::assets::register("colorwhiteplaceholder_dds", include_bytes!("assets/colorwhiteplaceholder.dds"));
+    hematite_core::assets::register("colorwhiteplaceholder_tex", include_bytes!("assets/colorwhiteplaceholder.tex"));
+    hematite_core::assets::register("outlinetonemap_dds", include_bytes!("assets/outlinetonemap.dds"));
+    hematite_core::assets::register("outlinetonemap_tex", include_bytes!("assets/outlinetonemap.tex"));
+    hematite_core::assets::register("toonshading_dds", include_bytes!("assets/toonshading.dds"));
+    hematite_core::assets::register("toonshading_tex", include_bytes!("assets/toonshading.tex"));
 }
 
 // ---------------------------------------------------------------------------

@@ -50,6 +50,9 @@ pub struct RepathOptions {
     /// referenced from BIN strings but missing in the mod are pulled from
     /// here so the repathed mod is fully self-contained.
     pub game_wad: Option<PathBuf>,
+
+    /// List of rules mapping regex patterns to asset placeholders.
+    pub placeholder_rules: Vec<crate::config::PlaceholderRule>,
 }
 
 impl RepathOptions {
@@ -61,6 +64,7 @@ impl RepathOptions {
             invis_texture: false,
             skip_vo: true,
             game_wad: None,
+            placeholder_rules: Vec::new(),
         }
     }
 

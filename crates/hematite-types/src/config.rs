@@ -45,6 +45,16 @@ pub struct RepathConfig {
     /// Skip voice-over audio paths (should almost always stay `true`).
     #[serde(default = "default_true")]
     pub skip_vo: bool,
+    /// List of rules mapping regex patterns to asset placeholders.
+    #[serde(default)]
+    pub placeholder_rules: Vec<PlaceholderRule>,
+}
+
+/// A rule that associates a regex pattern with a custom asset name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceholderRule {
+    pub pattern: String,
+    pub asset: String,
 }
 
 fn default_repath_prefix() -> String {
@@ -62,6 +72,7 @@ impl Default for RepathConfig {
             prefix: default_repath_prefix(),
             invis_texture: false,
             skip_vo: true,
+            placeholder_rules: Vec::new(),
         }
     }
 }
@@ -258,6 +269,10 @@ pub enum TransformAction {
         #[serde(default = "default_true")]
         link_in_source: bool,
     },
+
+    /// Merge linked spell/anim BINs into the champion's main BIN.
+    #[serde(rename = "merge_linked_bins")]
+    MergeLinkedBins,
 }
 
 /// Parent embed to create when EnsureField target doesn't exist yet.

@@ -5,9 +5,38 @@
         "enabled": true,
         "prefix": "hematite",
         "invis_texture": true,
-        "skip_vo": true
+        "skip_vo": true,
+        "placeholder_rules": [
+            {
+                "pattern": "(?i)coloroverlifetime|color-hold|colorhold",
+                "asset": "colorwhiteplaceholder"
+            },
+            {
+                "pattern": "(?i)toonshading",
+                "asset": "toonshading"
+            },
+            {
+                "pattern": "(?i)outlinetonemap",
+                "asset": "outlinetonemap"
+            }
+        ]
     },
     "fixes": {
+        "merge_linked_bins": {
+            "name": "Merge Linked BINs",
+            "description": "Recursively merges linked dependency BINs (spells, animation, etc.) into parent character BINs, removing the separate dependency files from the WAD.",
+            "enabled": true,
+            "severity": "high",
+            "detect": {
+                "type": "entry_type_exists_any",
+                "entry_types": [
+                    "SkinCharacterDataProperties"
+                ]
+            },
+            "apply": {
+                "type": "merge_linked_bins"
+            }
+        },
         "healthbar_fix": {
             "name": "Missing HP Bar",
             "description": "Adds UnitHealthBarStyle field to fix invisible health bars",

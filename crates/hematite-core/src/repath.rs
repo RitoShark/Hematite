@@ -422,7 +422,7 @@ pub fn repath_bin_strings(
             // Align extensions if the reference differs from the actual file in WAD
             let lower_val = value.to_lowercase().replace('\\', "/");
             if lower_val != actual_path {
-                if let Some(ext) = actual_path.split('.').last() {
+                if let Some(ext) = actual_path.split('.').next_back() {
                     if let Some(dot) = new_path.rfind('.') {
                         new_path = format!("{}.{}", &new_path[..dot], ext);
                     }
@@ -476,7 +476,7 @@ pub fn repath_bin_strings(
         // Align extensions if the reference differs from the actual file in WAD
         let lower_link = link.to_lowercase().replace('\\', "/");
         if lower_link != actual_path {
-            if let Some(ext) = actual_path.split('.').last() {
+            if let Some(ext) = actual_path.split('.').next_back() {
                 if let Some(dot) = new_path.rfind('.') {
                     new_path = format!("{}.{}", &new_path[..dot], ext);
                 }
@@ -545,16 +545,25 @@ pub fn repath_wad_path(path: &str, prefix: &str, layout: RepathLayout) -> Option
 // ---------------------------------------------------------------------------
 
 /// Build a list of `(path, bytes)` placeholder entries for every texture
-/// path referenced by BIN files but absent from the WAD after repathing.
+/// path referenced by BIN files but absent from the WAD after repathing,
+/// mapping them to custom assets using the configured `placeholder_rules`.
 ///
 /// Both `.dds` and `.tex` references are normalised to `.tex` (the native
-/// League format) and filled with [`INVIS_TEX`].
-pub fn missing_invis_placeholders(
+/// League format) and filled with the matching asset (or [`INVIS_TEX`] as fallback).
+pub fn missing_placeholders(
     existing_paths: &HashSet<String>,
     referenced_paths: &[String],
+    placeholder_rules: &[hematite_types::config::PlaceholderRule],
 ) -> Vec<(String, Vec<u8>)> {
     let mut result = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+
+    let mut compiled_rules = Vec::new();
+    for rule in placeholder_rules {
+        if let Ok(re) = regex::Regex::new(&rule.pattern) {
+            compiled_rules.push((re, &rule.asset));
+        }
+    }
 
     for raw in referenced_paths {
         let path = raw.to_lowercase();
@@ -575,9 +584,37 @@ pub fn missing_invis_placeholders(
         if existing_paths.contains(&tex_path) {
             continue;
         }
-        result.push((tex_path, INVIS_TEX.to_vec()));
+
+        let mut matched_asset = None;
+        for (re, asset_name) in &compiled_rules {
+            if re.is_match(raw) || re.is_match(&tex_path) {
+                let asset_key = format!("{}_tex", asset_name);
+                if let Some(bytes) = crate::assets::get(&asset_key) {
+                    matched_asset = Some(bytes);
+                    break;
+                } else if let Some(bytes) = crate::assets::get(asset_name) {
+                    matched_asset = Some(bytes);
+                    break;
+                }
+            }
+        }
+
+        let bytes = matched_asset.unwrap_or(INVIS_TEX);
+        result.push((tex_path, bytes.to_vec()));
     }
     result
+}
+
+/// Build a list of `(path, bytes)` placeholder entries for every texture
+/// path referenced by BIN files but absent from the WAD after repathing.
+///
+/// Both `.dds` and `.tex` references are normalised to `.tex` (the native
+/// League format) and filled with [`INVIS_TEX`].
+pub fn missing_invis_placeholders(
+    existing_paths: &HashSet<String>,
+    referenced_paths: &[String],
+) -> Vec<(String, Vec<u8>)> {
+    missing_placeholders(existing_paths, referenced_paths, &[])
 }
 
 // ---------------------------------------------------------------------------
@@ -1134,5 +1171,50 @@ mod tests {
         // Verify the string inside the tree was updated to the repathed path with forward slashes
         let strings = crate::walk::extract_strings(&tree);
         assert_eq!(strings[0], "ASSETS/.yone1_characters/yone/skins/skin0/yone.dds");
+    }
+
+    #[test]
+    fn test_placeholder_rules_matching() {
+        use hematite_types::config::PlaceholderRule;
+
+        static WHITE_BYTES: &[u8] = b"white-placeholder-data";
+        static TOON_BYTES: &[u8] = b"toon-shading-data";
+        crate::assets::register("colorwhiteplaceholder_tex", WHITE_BYTES);
+        crate::assets::register("toonshading_tex", TOON_BYTES);
+
+        let rules = vec![
+            PlaceholderRule {
+                pattern: "(?i)coloroverlifetime|color-hold|colorhold".to_string(),
+                asset: "colorwhiteplaceholder".to_string(),
+            },
+            PlaceholderRule {
+                pattern: "(?i)toonshading".to_string(),
+                asset: "toonshading".to_string(),
+            },
+        ];
+
+        let referenced = vec![
+            "path/to/my_color-hold.dds".to_string(),
+            "path/to/my_toonshading.tex".to_string(),
+            "path/to/nothing_special.dds".to_string(),
+        ];
+
+        let existing = HashSet::new();
+
+        let placeholders = missing_placeholders(&existing, &referenced, &rules);
+
+        assert_eq!(placeholders.len(), 3);
+
+        // my_color-hold.dds is converted to .tex and matches colorwhiteplaceholder
+        let p0 = placeholders.iter().find(|(path, _)| path == "path/to/my_color-hold.tex").unwrap();
+        assert_eq!(p0.1, WHITE_BYTES);
+
+        // my_toonshading.tex matches toonshading
+        let p1 = placeholders.iter().find(|(path, _)| path == "path/to/my_toonshading.tex").unwrap();
+        assert_eq!(p1.1, TOON_BYTES);
+
+        // nothing_special.dds falls back to INVIS_TEX
+        let p2 = placeholders.iter().find(|(path, _)| path == "path/to/nothing_special.tex").unwrap();
+        assert_eq!(p2.1, INVIS_TEX);
     }
 }
