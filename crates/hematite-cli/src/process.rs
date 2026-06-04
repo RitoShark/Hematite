@@ -1873,112 +1873,29 @@ fn process_fantome_file(
     Ok(total_result)
 }
 
-/// Extract files referenced by BIN strings but missing from the mod WAD.
+/// Make the mod self-contained by pulling missing dependencies out of the
+/// base-game `.wad.client` at `game_wad_path`.
 ///
-/// Opens the base-game `.wad.client` at `game_wad_path`, scans all BIN files
-/// in `all_files` for asset-path strings, identifies which ones are missing
-/// from the mod, and extracts them from the game WAD.  The extracted files are
-/// appended to `all_files` so the subsequent repath step can repath everything.
+/// Thin wrapper over [`crate::deep_repair::resolve_from_game_wad`], which
+/// performs seed-BIN backfill (asset-only mods get a foundation skin BIN) and
+/// a transitive dependency closure (recursively pull every referenced/linked
+/// file until nothing new appears). Extracted files are appended to
+/// `all_files`.
 ///
-/// Returns the number of files pulled from the game WAD.
+/// Returns the total number of files pulled from the game WAD.
 fn extract_missing_from_game_wad(
     game_wad_path: &Path,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,
     bin_provider: &LtkBinProvider,
-    _hash_provider: &dyn HashProvider,
+    hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<u32> {
-    use hematite_ltk::wad_adapter::WadFile;
-
-    tracing::info!(
-        "Opening game WAD for missing file extraction (lazy mode): {}",
-        game_wad_path.display()
-    );
-
-    // 1. Collect all asset paths referenced by BIN files in the mod.
-    //    Identify BINs by extension OR magic so unresolved entries are caught.
-    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (_, path, bytes) in all_files.iter() {
-        let is_bin = path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
-        if !is_bin {
-            continue;
-        }
-        if let Ok(tree) = bin_provider.parse_bytes(bytes) {
-            let paths = repath_core::collect_bin_asset_paths(&tree, opts.skip_vo);
-            referenced.extend(paths);
-        }
-    }
-
-    // 2. Build a path+hash index of what the mod already ships.
-    let mod_index =
-        repath_core::WadIndex::from_entries(all_files.iter().map(|(h, p, _)| (*h, p.clone())));
-
-    // 3. Determine which referenced paths are missing (alternates + hash).
-    let missing: Vec<String> = referenced
-        .into_iter()
-        .filter(|p| !mod_index.has(p, wad_path_hash))
-        .collect();
-
-    if missing.is_empty() {
-        tracing::info!("  All referenced files already present in mod — nothing to pull");
-        return Ok(0);
-    }
-
-    tracing::info!(
-        "  {} referenced file(s) missing from mod, checking game WAD...",
-        missing.len()
-    );
-
-    // 4. Open game WAD lazily.
-    let mut game_wad = WadFile::open(game_wad_path)
-        .with_context(|| format!("Failed to open game WAD: {}", game_wad_path.display()))?;
-
-    let game_hashes = game_wad.chunk_hash_set();
-
-    // 5. Pull each missing file from the game WAD lazily.
-    let mut added = 0u32;
-    for missing_path in &missing {
-        let mut candidates = vec![missing_path.clone()];
-        if let Some(stem) = missing_path.strip_suffix(".dds") {
-            candidates.push(format!("{}.tex", stem));
-        } else if let Some(stem) = missing_path.strip_suffix(".tex") {
-            candidates.push(format!("{}.dds", stem));
-        } else if let Some(stem) = missing_path.strip_suffix(".sco") {
-            candidates.push(format!("{}.scb", stem));
-        } else if let Some(stem) = missing_path.strip_suffix(".scb") {
-            candidates.push(format!("{}.sco", stem));
-        }
-
-        let mut pulled = false;
-        for candidate in candidates {
-            let bin_hash = wad_path_hash(&candidate);
-            if let Some(resolved_hash) = hematite_ltk::wad_adapter::resolve_wad_hash_for(&candidate, bin_hash, &game_hashes) {
-                match game_wad.extract_chunk_by_hash(resolved_hash) {
-                    Ok(Some(bytes)) => {
-                        all_files.push((bin_hash, candidate.clone(), bytes));
-                        added += 1;
-                        pulled = true;
-                        tracing::debug!("  + pulled from game: {}", candidate);
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!("Failed to extract game WAD chunk for {}: {}", candidate, e);
-                    }
-                }
-            }
-        }
-
-        if !pulled {
-            tracing::debug!("  - not found in game WAD: {}", missing_path);
-        }
-    }
-
-    tracing::info!(
-        "  Pulled {} file(s) from game WAD ({} still missing)",
-        added,
-        missing.len() as u32 - added
-    );
-
-    Ok(added)
+    let stats = crate::deep_repair::resolve_from_game_wad(
+        game_wad_path,
+        all_files,
+        bin_provider,
+        hash_provider,
+        opts,
+    )?;
+    Ok(stats.files_pulled)
 }

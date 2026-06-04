@@ -18,6 +18,7 @@
 
 mod args;
 mod banner;
+mod deep_repair;
 mod hash_downloader;
 mod interactive;
 mod logging;
