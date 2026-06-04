@@ -134,6 +134,21 @@ Full architecture, transform framework, contribution flow → **[DEVELOPER.md](D
 
 </td>
 </tr>
+<tr>
+<td>
+
+### Deep repair
+- **Seed-BIN backfill** — asset-only mods (loose textures/meshes, no character BIN) now get their canonical `skin{N}.bin` pulled from the base game as a foundation
+- **Transitive dependency closure** — `--game-wad` now follows the *full* dependency chain (referenced assets **and** `.linked` BINs), recursing until the mod is self-contained
+
+</td>
+<td>
+
+### We own the stack
+- **Migrated off `league-toolkit`** onto the in-house [RitoShark `rs_*` crates](https://github.com/RitoShark/RitoShark-Crates) (`rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`) — isolated entirely within `hematite-ltk`, so the fix engine never noticed
+
+</td>
+</tr>
 </table>
 
 > Three new transform primitives let configs do more without code: `transform_bytes` (in-place byte ops), `add_files` (inject named assets from the registry), and `split_entries_by_type` (move objects into a sibling BIN). See [DEVELOPER.md](DEVELOPER.md#transform-framework) for the schema.
@@ -172,7 +187,7 @@ hematite-cli "MyAwesomeSkin.fantome"
 | `--dry-run` | Show what *would* be fixed |
 | `--json` | Emit machine-readable output (skips the "press enter" pause) |
 | `--repath` | Rename mod assets with a unique prefix so they can't collide with the base game |
-| `--game-wad <PATH>` | Pull missing referenced files from the base-game WAD so the mod is self-contained |
+| `--game-wad <PATH>` | **Deep repair** (requires `--repath`): make the mod self-contained by pulling missing dependencies from the base-game champion WAD. Backfills the canonical `skin{N}.bin` for asset-only mods, then transitively resolves every referenced + linked file until the dependency chain is closed |
 | `--invis-texture` | Inject invisible placeholders for missing texture refs after repath |
 | `-v verbose` | Show every fix as it's applied; `-v trace` for everything |
 

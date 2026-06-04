@@ -33,16 +33,18 @@ For the user-facing intro see [README.md](README.md).
 
 ## Architecture
 
-4-crate Rust workspace. The fix engine **never imports league-toolkit**
-— when LTK changes its API, only the adapter crate needs updating.
+4-crate Rust workspace. The fix engine **never imports the file-format
+crates** — when those crates change their API, only the adapter crate
+needs updating. (The adapter currently wraps the RitoShark `rs_*`
+crates, which the team owns; it previously wrapped `league-toolkit`.)
 
 ```mermaid
 graph TD
-    CLI[hematite-cli<br/><sub>args · logging · file routing · remote config · version gate</sub>]
+    CLI[hematite-cli<br/><sub>args · logging · file routing · remote config · version gate · deep-repair</sub>]
     CORE[hematite-core<br/><sub>detection · transforms · walker · seeds · assets registry</sub>]
-    LTK[hematite-ltk<br/><sub>BIN/WAD/texture adapters · the only crate importing league-toolkit</sub>]
+    LTK[hematite-ltk<br/><sub>BIN/WAD/texture adapters · the only crate importing the rs_* format crates</sub>]
     TYPES[hematite-types<br/><sub>pure data types · config schema · hash newtypes</sub>]
-    LEAGUE[(league-toolkit)]
+    LEAGUE[("RitoShark rs_* crates<br/>rs_bin · rs_wad · rs_tex · rs_mesh · rs_io")]
 
     CLI --> CORE
     CLI --> LTK
@@ -57,7 +59,7 @@ Crate purpose:
 |---|---|
 | `hematite-types` | Pure data: `BinTree`, `FixConfig`, `RepathOptions`, hash newtypes. No deps on parsing libs. |
 | `hematite-core` | Fix engine: detection rules, transform actions, BFS walker, fallback, repath, seed discovery, asset registry. Operates against trait abstractions. |
-| `hematite-ltk` | The **only** crate that touches `league-toolkit`. Provides `BinProvider`, `HashProvider`, `WadProvider` implementations, plus texture converters (DDS↔TEX, strip-mipmaps, fix-dimensions). |
+| `hematite-ltk` | The **only** crate that touches the file-format crates (the RitoShark `rs_*` crates: `rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`). Provides `BinProvider`, `HashProvider`, `WadProvider` implementations, plus texture converters (DDS↔TEX, strip-mipmaps, fix-dimensions). Name kept `hematite-ltk` for history. |
 | `hematite-cli` | Binary: CLI args, logging, file-type routing, remote config fetching, the version-gate, batch orchestration. |
 
 ```
@@ -65,7 +67,7 @@ hematite-v2/
 ├── crates/
 │   ├── hematite-types/   pure data types, config schema, hash newtypes
 │   ├── hematite-core/    fix engine
-│   ├── hematite-ltk/     LTK adapter + byte-level texture work
+│   ├── hematite-ltk/     rs_* format-crate adapter + byte-level texture work
 │   └── hematite-cli/     CLI binary
 ├── config/
 │   ├── fix_config.json       fix rule definitions (remote-fetched, embedded fallback)
