@@ -1,11 +1,11 @@
 //! # hematite-core
 //!
 //! The fix engine for Hematite. This crate contains all detection and transformation
-//! logic but has **zero** league-toolkit imports. It operates on types from
-//! [`hematite_types`] and interacts with LTK through trait abstractions.
+//! logic but has **zero** file-format-crate imports. It operates on types from
+//! [`hematite_types`] and interacts with file formats through trait abstractions.
 //!
-//! ## Key rule: NO LTK IMPORTS
-//! When `ltk_meta` / `ltk_ritobin` break their APIs, only `hematite-ltk` needs updating.
+//! ## Key rule: NO FILE-FORMAT-CRATE IMPORTS
+//! When the RitoShark `rs_*` crates break their APIs, only `hematite-file` needs updating.
 //! This crate stays untouched.
 //!
 //! ## Modules

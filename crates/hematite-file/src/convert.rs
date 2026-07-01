@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use rs_bin::{Bin as RsBin, BinEntry, BinType, BinValue};
 
 /// Convert an rs_bin `Bin` to a Hematite `BinTree` (after parsing).
-pub fn ltk_tree_to_hematite(rs_bin: RsBin) -> Result<BinTree> {
+pub fn rs_bin_tree_to_hematite(rs_bin: RsBin) -> Result<BinTree> {
     let mut objects = IndexMap::new();
 
     for entry in rs_bin.entries {
@@ -24,7 +24,7 @@ pub fn ltk_tree_to_hematite(rs_bin: RsBin) -> Result<BinTree> {
 }
 
 /// Convert a Hematite `BinTree` to an rs_bin `Bin` (before writing).
-pub fn hematite_tree_to_ltk(tree: &BinTree) -> Result<RsBin> {
+pub fn hematite_tree_to_rs_bin(tree: &BinTree) -> Result<RsBin> {
     let mut bin = RsBin::new();
     bin.linked = tree.linked.clone();
 
@@ -42,7 +42,7 @@ fn entry_to_hematite(entry: BinEntry) -> Result<BinObject> {
     for (name_hash, value) in entry.fields {
         let prop = BinProperty {
             name_hash: FieldHash(name_hash),
-            value: ltk_value_to_hematite(&value)?,
+            value: rs_bin_value_to_hematite(&value)?,
         };
         properties.insert(name_hash, prop);
     }
@@ -59,7 +59,7 @@ fn hematite_object_to_entry(obj: &BinObject) -> Result<BinEntry> {
     let mut fields = IndexMap::new();
 
     for (name_hash, prop) in &obj.properties {
-        fields.insert(*name_hash, hematite_value_to_ltk(&prop.value)?);
+        fields.insert(*name_hash, hematite_value_to_rs_bin(&prop.value)?);
     }
 
     Ok(BinEntry {
@@ -88,7 +88,7 @@ fn unflatten_mtx(m: &[f32; 16]) -> [[f32; 4]; 4] {
 }
 
 /// Convert an rs_bin `BinValue` to a Hematite `PropertyValue`.
-pub fn ltk_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
+pub fn rs_bin_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
     let out = match val {
         // hematite's PropertyValue has no None variant; LTK errored on it, so we do too.
         BinValue::None => bail!("None value encountered in BIN"),
@@ -131,7 +131,7 @@ pub fn ltk_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
         BinValue::List { is_list2, items, .. } => {
             let mut vec = Vec::with_capacity(items.len());
             for item in items {
-                vec.push(ltk_value_to_hematite(item)?);
+                vec.push(rs_bin_value_to_hematite(item)?);
             }
             if *is_list2 {
                 PropertyValue::UnorderedContainer(vec)
@@ -143,7 +143,7 @@ pub fn ltk_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
         // Optional
         BinValue::Option { value, .. } => {
             let opt = match value {
-                Some(inner) => Some(ltk_value_to_hematite(inner)?),
+                Some(inner) => Some(rs_bin_value_to_hematite(inner)?),
                 None => None,
             };
             PropertyValue::Optional(Box::new(opt))
@@ -153,7 +153,7 @@ pub fn ltk_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
         BinValue::Map { entries, .. } => {
             let mut pairs = Vec::with_capacity(entries.len());
             for (k, v) in entries {
-                pairs.push((ltk_value_to_hematite(k)?, ltk_value_to_hematite(v)?));
+                pairs.push((rs_bin_value_to_hematite(k)?, rs_bin_value_to_hematite(v)?));
             }
             PropertyValue::Map(pairs)
         }
@@ -163,7 +163,7 @@ pub fn ltk_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
 }
 
 /// Convert a Hematite `PropertyValue` to an rs_bin `BinValue`.
-pub fn hematite_value_to_ltk(val: &PropertyValue) -> Result<BinValue> {
+pub fn hematite_value_to_rs_bin(val: &PropertyValue) -> Result<BinValue> {
     let out = match val {
         // Primitives
         PropertyValue::Bool(v) => BinValue::Bool(*v),
@@ -193,20 +193,20 @@ pub fn hematite_value_to_ltk(val: &PropertyValue) -> Result<BinValue> {
 
         // Nested structures
         PropertyValue::Struct(s) => {
-            let (class, fields) = hematite_struct_to_ltk(s)?;
+            let (class, fields) = hematite_struct_to_rs_bin(s)?;
             BinValue::Pointer { class, fields }
         }
         PropertyValue::Embedded(s) => {
-            let (class, fields) = hematite_struct_to_ltk(s)?;
+            let (class, fields) = hematite_struct_to_rs_bin(s)?;
             BinValue::Embed { class, fields }
         }
 
         // Collections
-        PropertyValue::Container(items) => vec_to_ltk_list(items, false)?,
-        PropertyValue::UnorderedContainer(items) => vec_to_ltk_list(items, true)?,
+        PropertyValue::Container(items) => vec_to_rs_bin_list(items, false)?,
+        PropertyValue::UnorderedContainer(items) => vec_to_rs_bin_list(items, true)?,
 
         // Optional
-        PropertyValue::Optional(opt) => option_to_ltk_optional(opt.as_ref())?,
+        PropertyValue::Optional(opt) => option_to_rs_bin_optional(opt.as_ref())?,
 
         // Map
         PropertyValue::Map(pairs) => {
@@ -215,13 +215,13 @@ pub fn hematite_value_to_ltk(val: &PropertyValue) -> Result<BinValue> {
                 (BinType::U32, BinType::U32)
             } else {
                 (
-                    hematite_value_to_ltk(&pairs[0].0)?.ty(),
-                    hematite_value_to_ltk(&pairs[0].1)?.ty(),
+                    hematite_value_to_rs_bin(&pairs[0].0)?.ty(),
+                    hematite_value_to_rs_bin(&pairs[0].1)?.ty(),
                 )
             };
             let mut entries = Vec::with_capacity(pairs.len());
             for (k, v) in pairs {
-                entries.push((hematite_value_to_ltk(k)?, hematite_value_to_ltk(v)?));
+                entries.push((hematite_value_to_rs_bin(k)?, hematite_value_to_rs_bin(v)?));
             }
             BinValue::Map {
                 key,
@@ -241,7 +241,7 @@ fn struct_to_hematite(class: u32, fields: &IndexMap<u32, BinValue>) -> Result<St
     for (name_hash, value) in fields {
         let prop = BinProperty {
             name_hash: FieldHash(*name_hash),
-            value: ltk_value_to_hematite(value)?,
+            value: rs_bin_value_to_hematite(value)?,
         };
         properties.insert(*name_hash, prop);
     }
@@ -253,21 +253,21 @@ fn struct_to_hematite(class: u32, fields: &IndexMap<u32, BinValue>) -> Result<St
 }
 
 /// Build an rs_bin struct body (class hash + fields) from a Hematite `StructValue`.
-fn hematite_struct_to_ltk(s: &StructValue) -> Result<(u32, IndexMap<u32, BinValue>)> {
+fn hematite_struct_to_rs_bin(s: &StructValue) -> Result<(u32, IndexMap<u32, BinValue>)> {
     let mut fields = IndexMap::new();
 
     for (name_hash, prop) in &s.properties {
-        fields.insert(*name_hash, hematite_value_to_ltk(&prop.value)?);
+        fields.insert(*name_hash, hematite_value_to_rs_bin(&prop.value)?);
     }
 
     Ok((s.class_hash.0, fields))
 }
 
 /// Convert a Vec<PropertyValue> to an rs_bin `List`/`List2` (infers item type from first element).
-fn vec_to_ltk_list(items: &[PropertyValue], is_list2: bool) -> Result<BinValue> {
+fn vec_to_rs_bin_list(items: &[PropertyValue], is_list2: bool) -> Result<BinValue> {
     let mut converted = Vec::with_capacity(items.len());
     for item in items {
-        converted.push(hematite_value_to_ltk(item)?);
+        converted.push(hematite_value_to_rs_bin(item)?);
     }
 
     // Infer element tag from the first element; default to U32 for empty lists
@@ -282,12 +282,12 @@ fn vec_to_ltk_list(items: &[PropertyValue], is_list2: bool) -> Result<BinValue> 
 }
 
 /// Convert an Option<PropertyValue> to an rs_bin `Option` (infers item type from Some value).
-fn option_to_ltk_optional(opt: &Option<PropertyValue>) -> Result<BinValue> {
+fn option_to_rs_bin_optional(opt: &Option<PropertyValue>) -> Result<BinValue> {
     let (item, value) = match opt {
         // Empty option - default to U32 (matches the previous behavior of an absent value).
         None => (BinType::U32, None),
         Some(val) => {
-            let converted = hematite_value_to_ltk(val)?;
+            let converted = hematite_value_to_rs_bin(val)?;
             (converted.ty(), Some(Box::new(converted)))
         }
     };

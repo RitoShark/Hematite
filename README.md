@@ -145,7 +145,7 @@ Full architecture, transform framework, contribution flow → **[DEVELOPER.md](D
 <td>
 
 ### We own the stack
-- **Migrated off `league-toolkit`** onto the in-house [RitoShark `rs_*` crates](https://github.com/RitoShark/RitoShark-Crates) (`rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`) — isolated entirely within `hematite-ltk`, so the fix engine never noticed
+- **Migrated off `league-toolkit`** onto the in-house [RitoShark `rs_*` crates](https://github.com/RitoShark/RitoShark-Crates) (`rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`) — isolated entirely within `hematite-file`, so the fix engine never noticed
 
 </td>
 </tr>

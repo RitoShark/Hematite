@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 hematite-types = { workspace = true }
 hematite-core = { workspace = true }
-hematite-ltk = { workspace = true }
+hematite-file = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

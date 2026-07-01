@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/hematite-types",
     "crates/hematite-core",
-    "crates/hematite-ltk",
+    "crates/hematite-file",
     "crates/hematite-cli",
 ]
 
@@ -23,4 +23,4 @@ indexmap = { version = "2.7", features = ["serde"] }
 # Internal crates
 hematite-types = { path = "crates/hematite-types" }
 hematite-core = { path = "crates/hematite-core" }
-hematite-ltk = { path = "crates/hematite-ltk" }
+hematite-file = { path = "crates/hematite-file" }

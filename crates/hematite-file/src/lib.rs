@@ -1,4 +1,4 @@
-//! LTK adapter — the ONLY crate that imports league-toolkit.
+//! File-format adapter — the ONLY crate that imports the RitoShark rs_* crates.
 
 pub mod bin_adapter;
 pub mod convert;

@@ -85,15 +85,15 @@ pub fn resolve_wad_hash_for(
     None
 }
 
-/// WAD provider backed by league-toolkit's ltk_wad.
+/// WAD provider backed by RitoShark's rs_wad.
 ///
 /// Stores only the set of path hashes for fast existence checks.
-pub struct LtkWadProvider {
+pub struct FileWadProvider {
     /// Set of xxhash64 path hashes present in the WAD.
     path_hashes: HashSet<u64>,
 }
 
-impl LtkWadProvider {
+impl FileWadProvider {
     /// Create empty WAD provider.
     pub fn new() -> Self {
         Self {
@@ -137,13 +137,13 @@ impl LtkWadProvider {
     }
 }
 
-impl Default for LtkWadProvider {
+impl Default for FileWadProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl WadProvider for LtkWadProvider {
+impl WadProvider for FileWadProvider {
     fn has_path(&self, path: &str) -> bool {
         let normalized = path.to_lowercase().replace('\\', "/");
         let hash = xxh64(normalized.as_bytes(), 0);
@@ -176,9 +176,9 @@ impl WadFile {
         Ok(Self { wad })
     }
 
-    /// Build an `LtkWadProvider` from this WAD's chunk list.
-    pub fn build_provider(&self) -> LtkWadProvider {
-        let mut provider = LtkWadProvider::new();
+    /// Build a `FileWadProvider` from this WAD's chunk list.
+    pub fn build_provider(&self) -> FileWadProvider {
+        let mut provider = FileWadProvider::new();
         for chunk in &self.wad.chunks {
             provider.path_hashes.insert(chunk.path_hash);
         }

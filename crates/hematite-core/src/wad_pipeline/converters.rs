@@ -68,7 +68,7 @@ impl Default for ConverterRegistry {
 ///
 /// Placeholder DDS→TEX converter (returns input unchanged).
 ///
-/// Actual implementation is in hematite-ltk and registered at runtime.
+/// Actual implementation is in hematite-file and registered at runtime.
 fn dds_to_tex(input: &[u8]) -> Result<Vec<u8>> {
     tracing::warn!("DDS→TEX conversion not implemented, file will retain DDS format");
     Ok(input.to_vec())
@@ -76,7 +76,7 @@ fn dds_to_tex(input: &[u8]) -> Result<Vec<u8>> {
 
 /// Placeholder SCO→SCB converter (returns input unchanged).
 ///
-/// Actual implementation is in hematite-ltk and registered at runtime.
+/// Actual implementation is in hematite-file and registered at runtime.
 fn sco_to_scb(input: &[u8]) -> Result<Vec<u8>> {
     tracing::warn!("SCO→SCB conversion not yet implemented, returning unchanged");
     Ok(input.to_vec())

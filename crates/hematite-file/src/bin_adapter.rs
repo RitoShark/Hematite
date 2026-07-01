@@ -1,6 +1,6 @@
 //! BIN parsing adapter using rs_bin.
 
-use crate::convert::ltk_tree_to_hematite;
+use crate::convert::rs_bin_tree_to_hematite;
 use anyhow::Result;
 use hematite_core::traits::BinProvider;
 use hematite_types::bin::BinTree;
@@ -8,31 +8,31 @@ use rs_bin::Bin as RsBin;
 use rs_io::{Parse, Serialize};
 
 /// BIN provider backed by rs_bin.
-pub struct LtkBinProvider;
+pub struct FileBinProvider;
 
-impl LtkBinProvider {
+impl FileBinProvider {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for LtkBinProvider {
+impl Default for FileBinProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BinProvider for LtkBinProvider {
+impl BinProvider for FileBinProvider {
     fn parse_bytes(&self, data: &[u8]) -> Result<BinTree> {
         let rs_bin = RsBin::from_bytes(data)
             .map_err(|e| anyhow::anyhow!("Failed to parse BIN: {:?}", e))?;
-        ltk_tree_to_hematite(rs_bin)
+        rs_bin_tree_to_hematite(rs_bin)
     }
 
     fn write_bytes(&self, tree: &BinTree) -> Result<Vec<u8>> {
-        use crate::convert::hematite_tree_to_ltk;
+        use crate::convert::hematite_tree_to_rs_bin;
 
-        let rs_bin = hematite_tree_to_ltk(tree)?;
+        let rs_bin = hematite_tree_to_rs_bin(tree)?;
 
         rs_bin
             .to_bytes()
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_empty_tree() {
-        let provider = LtkBinProvider::new();
+        let provider = FileBinProvider::new();
         let tree = BinTree {
             objects: IndexMap::new(),
             linked: vec![],
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_simple_object() {
-        let provider = LtkBinProvider::new();
+        let provider = FileBinProvider::new();
 
         let mut properties = IndexMap::new();
         properties.insert(

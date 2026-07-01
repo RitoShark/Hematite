@@ -44,8 +44,8 @@ pub struct BinProperty {
 
 /// All possible property value types in a BIN file.
 ///
-/// Mirrors LTK's `PropertyValueEnum`. The conversion between
-/// LTK and Hematite types happens in `hematite-ltk/src/convert.rs`.
+/// Mirrors rs_bin's `BinValue`. The conversion between
+/// rs_bin and Hematite types happens in `hematite-file/src/convert.rs`.
 #[derive(Debug, Clone)]
 pub enum PropertyValue {
     // Primitives

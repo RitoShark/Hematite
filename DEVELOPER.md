@@ -42,15 +42,15 @@ crates, which the team owns; it previously wrapped `league-toolkit`.)
 graph TD
     CLI[hematite-cli<br/><sub>args · logging · file routing · remote config · version gate · deep-repair</sub>]
     CORE[hematite-core<br/><sub>detection · transforms · walker · seeds · assets registry</sub>]
-    LTK[hematite-ltk<br/><sub>BIN/WAD/texture adapters · the only crate importing the rs_* format crates</sub>]
+    FILE[hematite-file<br/><sub>BIN/WAD/texture adapters · the only crate importing the rs_* format crates</sub>]
     TYPES[hematite-types<br/><sub>pure data types · config schema · hash newtypes</sub>]
     LEAGUE[("RitoShark rs_* crates<br/>rs_bin · rs_wad · rs_tex · rs_mesh · rs_io")]
 
     CLI --> CORE
-    CLI --> LTK
+    CLI --> FILE
     CORE --> TYPES
-    LTK --> TYPES
-    LTK --> LEAGUE
+    FILE --> TYPES
+    FILE --> LEAGUE
 ```
 
 Crate purpose:
@@ -59,7 +59,7 @@ Crate purpose:
 |---|---|
 | `hematite-types` | Pure data: `BinTree`, `FixConfig`, `RepathOptions`, hash newtypes. No deps on parsing libs. |
 | `hematite-core` | Fix engine: detection rules, transform actions, BFS walker, fallback, repath, seed discovery, asset registry. Operates against trait abstractions. |
-| `hematite-ltk` | The **only** crate that touches the file-format crates (the RitoShark `rs_*` crates: `rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`). Provides `BinProvider`, `HashProvider`, `WadProvider` implementations, plus texture converters (DDS↔TEX, strip-mipmaps, fix-dimensions). Name kept `hematite-ltk` for history. |
+| `hematite-file` | The **only** crate that touches the file-format crates (the RitoShark `rs_*` crates: `rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`). Provides `BinProvider`, `HashProvider`, `WadProvider` implementations, plus texture converters (DDS↔TEX, strip-mipmaps, fix-dimensions). |
 | `hematite-cli` | Binary: CLI args, logging, file-type routing, remote config fetching, the version-gate, batch orchestration. |
 
 ```
@@ -67,7 +67,7 @@ hematite-v2/
 ├── crates/
 │   ├── hematite-types/   pure data types, config schema, hash newtypes
 │   ├── hematite-core/    fix engine
-│   ├── hematite-ltk/     rs_* format-crate adapter + byte-level texture work
+│   ├── hematite-file/    rs_* format-crate adapter + byte-level texture work
 │   └── hematite-cli/     CLI binary
 ├── config/
 │   ├── fix_config.json       fix rule definitions (remote-fetched, embedded fallback)
@@ -292,7 +292,7 @@ for a worked example).
 For raw-bytes work (texture munging, file-level repair):
 
 1. Add a `pub fn my_thing(bytes: &[u8]) -> anyhow::Result<Vec<u8>>` to
-   [`crates/hematite-ltk/src/`](crates/hematite-ltk/src/) — pick or
+   [`crates/hematite-file/src/`](crates/hematite-file/src/) — pick or
    create the appropriate module.
 2. Register it in
    [`crates/hematite-cli/src/process.rs`](crates/hematite-cli/src/process.rs)
@@ -327,7 +327,7 @@ Auto-downloaded from GitHub releases on first run.
 the LMDB.
 
 LMDB `map_size` must be page-aligned (`div_ceil(page) * page`) — see
-[`crates/hematite-ltk/src/lmdb_hash_adapter.rs`](crates/hematite-ltk/src/lmdb_hash_adapter.rs).
+[`crates/hematite-file/src/lmdb_hash_adapter.rs`](crates/hematite-file/src/lmdb_hash_adapter.rs).
 
 ---
 

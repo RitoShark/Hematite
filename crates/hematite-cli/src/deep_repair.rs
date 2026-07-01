@@ -20,14 +20,14 @@
 //!    `seen` set of every attempted path guards against infinite loops.
 //!
 //! This module lives in the CLI crate (not `hematite-core`) because it must
-//! import `hematite_ltk::wad_adapter::WadFile`, and `hematite-core` is
-//! deliberately LTK-free.
+//! import `hematite_file::wad_adapter::WadFile`, and `hematite-core` is
+//! deliberately free of file-format-crate dependencies.
 
 use anyhow::{Context, Result};
 use hematite_core::repath as repath_core;
 use hematite_core::seeds::{self, SkinSeed};
 use hematite_core::traits::{BinProvider, HashProvider};
-use hematite_ltk::wad_adapter::{resolve_wad_hash_for, wad_path_hash, WadFile};
+use hematite_file::wad_adapter::{resolve_wad_hash_for, wad_path_hash, WadFile};
 use hematite_types::repath::RepathOptions;
 use std::collections::HashSet;
 use std::path::Path;
@@ -359,7 +359,7 @@ mod tests {
     }
 
     /// In-memory BIN provider that recognises a tiny synthetic format so we
-    /// can exercise the closure loop without a real LTK BIN or game WAD.
+    /// can exercise the closure loop without a real BIN or game WAD.
     ///
     /// Encoding: bytes are the BIN magic `PROP` followed by a UTF-8 list of
     /// dependency paths separated by `\n`. `parse_bytes` returns a `BinTree`

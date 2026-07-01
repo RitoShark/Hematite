@@ -46,7 +46,7 @@ pub fn init(verbosity: &Verbosity, json_mode: bool) {
                 .expect("BUG: hardcoded directive is invalid"),
         )
         .add_directive(
-            format!("hematite_ltk={crate_level}")
+            format!("hematite_file={crate_level}")
                 .parse()
                 .expect("BUG: hardcoded directive is invalid"),
         );

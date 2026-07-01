@@ -8,8 +8,8 @@ use hematite_core::pipeline::apply_fixes;
 use hematite_core::repath as repath_core;
 use hematite_core::traits::{BinProvider, HashProvider};
 use hematite_core::wad_pipeline::converters::ConverterRegistry;
-use hematite_ltk::{
-    bin_adapter::LtkBinProvider, hash_adapter::TxtHashProvider,
+use hematite_file::{
+    bin_adapter::FileBinProvider, hash_adapter::TxtHashProvider,
     lmdb_hash_adapter::LmdbHashProvider, mesh_converter, texture_converter,
     wad_adapter::wad_path_hash,
 };
@@ -236,7 +236,7 @@ fn process_bin_file(
     tracing::info!("Processing BIN: {}", file.display());
 
     // Initialize BIN provider
-    let bin_provider = LtkBinProvider;
+    let bin_provider = FileBinProvider;
 
     // Read BIN file
     let bytes = std::fs::read(file).context("Failed to read BIN file")?;
@@ -340,11 +340,11 @@ fn process_wad_file(
         ctx.repath_opts,
     );
     use hematite_core::wad_pipeline;
-    use hematite_ltk::wad_adapter::WadFile;
+    use hematite_file::wad_adapter::WadFile;
 
     tracing::info!("Processing WAD: {}", file.display());
 
-    let bin_provider = LtkBinProvider;
+    let bin_provider = FileBinProvider;
 
     let mut wad_file = WadFile::open(file).context("Failed to open WAD file")?;
 
@@ -435,18 +435,18 @@ fn process_wad_file(
 
     // Perform file format conversions
     let mut converter_registry = ConverterRegistry::new();
-    // Register LTK-based converters (override placeholders)
+    // Register rs_*-based converters (override placeholders)
     converter_registry.register("dds_to_tex", texture_converter::dds_to_tex);
     converter_registry.register("sco_to_scb", mesh_converter::sco_to_scb);
     // In-place byte transforms — same registry, but addressed via
     // `WadTransformAction::TransformBytes` rules.
     converter_registry.register(
         "strip_mipmaps",
-        hematite_ltk::strip_mipmaps::strip_mipmaps_auto,
+        hematite_file::strip_mipmaps::strip_mipmaps_auto,
     );
     converter_registry.register(
         "fix_tex_dims",
-        hematite_ltk::fix_dimensions::fix_dimensions_auto,
+        hematite_file::fix_dimensions::fix_dimensions_auto,
     );
 
     let mut conversion_count = 0u32;
@@ -616,7 +616,7 @@ fn process_wad_file(
             Err(e) => {
                 // Not actionable for end users — a malformed BIN
                 // inside the mod usually means a custom container
-                // type the LTK parser doesn't recognise yet. Demote
+                // type the parser doesn't recognise yet. Demote
                 // to debug so it doesn't muddy the Normal-mode UI.
                 tracing::debug!("Failed to parse BIN {path}: {e}");
             }
@@ -1006,7 +1006,7 @@ fn process_wad_file(
         let mut output_file =
             std::fs::File::create(&output_path).context("Failed to create output WAD file")?;
 
-        let chunks_included = hematite_ltk::wad_builder::build_wad(
+        let chunks_included = hematite_file::wad_builder::build_wad(
             &all_files,
             &shared_files_to_remove,
             &mut output_file,
@@ -1078,11 +1078,11 @@ fn process_wad_folder(
         ctx.repath_opts,
     );
     use hematite_core::wad_pipeline;
-    use hematite_ltk::wad_adapter::{wad_path_hash, LtkWadProvider};
+    use hematite_file::wad_adapter::{wad_path_hash, FileWadProvider};
 
     tracing::info!("Processing WAD folder: {}", folder.display());
 
-    let bin_provider = LtkBinProvider;
+    let bin_provider = FileBinProvider;
 
     // Extract all files from the WAD folder
     let mut all_files = Vec::new();
@@ -1103,7 +1103,7 @@ fn process_wad_folder(
         }
     }
 
-    let wad_provider = LtkWadProvider::from_hashes(path_hashes);
+    let wad_provider = FileWadProvider::from_hashes(path_hashes);
 
     // Identify BIN entries by content magic, not just by path extension
     let bin_chunks: Vec<_> = all_files
@@ -1180,11 +1180,11 @@ fn process_wad_folder(
     converter_registry.register("sco_to_scb", mesh_converter::sco_to_scb);
     converter_registry.register(
         "strip_mipmaps",
-        hematite_ltk::strip_mipmaps::strip_mipmaps_auto,
+        hematite_file::strip_mipmaps::strip_mipmaps_auto,
     );
     converter_registry.register(
         "fix_tex_dims",
-        hematite_ltk::fix_dimensions::fix_dimensions_auto,
+        hematite_file::fix_dimensions::fix_dimensions_auto,
     );
 
     let mut conversion_count = 0u32;
@@ -1886,7 +1886,7 @@ fn process_fantome_file(
 fn extract_missing_from_game_wad(
     game_wad_path: &Path,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,
-    bin_provider: &LtkBinProvider,
+    bin_provider: &FileBinProvider,
     hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<u32> {

@@ -1,10 +1,10 @@
 //! Trait abstractions for external dependencies.
 //!
 //! The fix engine operates exclusively against these traits. Implementations
-//! live in `hematite-ltk` (or any future adapter crate).
+//! live in `hematite-file` (or any future adapter crate).
 //!
 //! ## Design rationale
-//! - `BinProvider`: Wraps BIN parsing/serialization. When LTK changes its BinTree API,
+//! - `BinProvider`: Wraps BIN parsing/serialization. When rs_bin changes its BinTree API,
 //!   only the adapter implementation changes.
 //! - `HashProvider`: Wraps hash dictionary loading (LMDB or txt files).
 //!   Reverse lookups (name → hash) are required for the fix engine.
