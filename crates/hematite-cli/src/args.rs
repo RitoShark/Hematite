@@ -209,15 +209,22 @@ impl From<RepathLayoutArg> for hematite_types::repath::RepathLayout {
 }
 
 /// All known fix IDs in application order.
+///
+/// Every ID here MUST have a rule in `config/fix_config.json` (`fixes` or
+/// `wad_fixes`) — `apply_fixes` records an error for any selected BIN-level
+/// ID absent from both maps, and main.rs bails on any error. Guarded by
+/// `all_fix_ids_exist_in_repo_config` below.
+///
+/// The live-game fix IDs (`gear_pull`, `cac_pull`, `resolve_dead_refs`,
+/// `combo_bin_relocate`) are deliberately NOT listed yet: their config rules
+/// land in a later task, which re-adds them here.
 const ALL_FIX_IDS: &[&str] = &[
     "healthbar_fix",
     "staticmat_texturepath",
     "staticmat_samplername",
     "black_icons",
     "dds_to_tex",
-    "resolve_dead_refs",
     "champion_bin_remover",
-    "combo_bin_relocate",
     "bnk_remover",
     "anm_remover",
     "dds_texture_converter",
@@ -226,8 +233,6 @@ const ALL_FIX_IDS: &[&str] = &[
     "vfx_shape_fix",
     "shader_fallback",
     "entry_validator",
-    "gear_pull",
-    "cac_pull",
 ];
 
 /// Collect selected fix IDs based on CLI flags.
@@ -283,4 +288,39 @@ pub fn collect_selected_fixes(cli: &Cli) -> Vec<String> {
     }
 
     fixes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ALL_FIX_IDS;
+
+    /// Regression guard: every ID in ALL_FIX_IDS must have a rule in the
+    /// repo's fix config (`fixes` ∪ `wad_fixes`). An ID selected by default
+    /// (`--all` / no flags) but missing from the config makes `apply_fixes`
+    /// push "Fix rule not found" into result.errors, and main.rs bails on
+    /// any error — i.e. every default invocation hard-fails. Never let
+    /// ALL_FIX_IDS drift ahead of the config again.
+    #[test]
+    fn all_fix_ids_exist_in_repo_config() {
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../config/fix_config.json");
+        let raw = std::fs::read_to_string(&config_path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", config_path.display()));
+        let config: hematite_types::config::FixConfig = serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("cannot parse {}: {e}", config_path.display()));
+
+        let missing: Vec<&&str> = ALL_FIX_IDS
+            .iter()
+            .filter(|id| {
+                !config.fixes.contains_key(**id) && !config.wad_fixes.contains_key(**id)
+            })
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "ALL_FIX_IDS entries missing from config/fix_config.json \
+             (fixes ∪ wad_fixes): {missing:?} — add the config rule first, \
+             then list the ID here"
+        );
+    }
 }
