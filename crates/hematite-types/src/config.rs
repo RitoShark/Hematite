@@ -152,6 +152,16 @@ pub enum DetectionRule {
         main_entry_type: String,
         targets: Vec<EntryValidationTarget>,
     },
+
+    /// Link fields on the main entry reference target entries that are defined
+    /// nowhere: not in this tree, not in mod-shipped linked trees, and not in
+    /// any game-resolvable `linked:` BIN. The lethal inverse of
+    /// `UnreferencedEntryOfType` (e.g. dead GearSkinUpgrade links crash).
+    #[serde(rename = "dead_entry_link")]
+    DeadEntryLink {
+        main_entry_type: String,
+        targets: Vec<EntryValidationTarget>,
+    },
 }
 
 /// How to fix a detected issue.

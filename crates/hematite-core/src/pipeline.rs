@@ -51,7 +51,7 @@ pub fn apply_fixes(
             continue;
         }
 
-        let detected = detect_issue(&fix_rule.detect, &ctx.tree, ctx.hashes, ctx.wad);
+        let detected = detect_issue(&fix_rule.detect, ctx);
 
         if detected {
             if dry_run {
@@ -102,6 +102,9 @@ fn extract_entry_type(rule: &DetectionRule) -> Option<&str> {
             shader_def_type, ..
         } => Some(shader_def_type.as_str()),
         DetectionRule::UnreferencedEntryOfType {
+            main_entry_type, ..
+        }
+        | DetectionRule::DeadEntryLink {
             main_entry_type, ..
         } => Some(main_entry_type.as_str()),
         DetectionRule::RecursiveStringExtensionNotInWad { .. }

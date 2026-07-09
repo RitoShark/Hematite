@@ -11,7 +11,10 @@
 //! | `EntryTypeExistsAny` | Any object matches entry type list |
 //! | `BnkVersionNotIn` | BNK audio version not in allowed list (file-level) |
 //! | `VfxShapeNeedsFix` | VFX shape has old format (pre-14.1) |
+//! | `DeadEntryLink` | Link fields reference target entries defined nowhere reachable |
 
+use crate::context::FixContext;
+use crate::detect::dead_links::collect_dead_links;
 use crate::factory::matches_json;
 use crate::filter;
 use crate::traits::{HashProvider, WadProvider};
@@ -21,12 +24,14 @@ use hematite_types::config::{DetectionRule, EntryValidationTarget};
 use hematite_types::hash::FieldHash;
 
 /// Main detection dispatch. Returns true if the issue is detected.
-pub fn detect_issue(
-    rule: &DetectionRule,
-    tree: &BinTree,
-    hashes: &dyn HashProvider,
-    wad: &dyn WadProvider,
-) -> bool {
+///
+/// Takes the full `FixContext` (rather than its individual fields) because
+/// some rules (e.g. `DeadEntryLink`) need access to `ctx.game` and
+/// `ctx.linked_trees`, not just the tree/hashes/wad triple.
+pub fn detect_issue(rule: &DetectionRule, ctx: &FixContext) -> bool {
+    let tree = &ctx.tree;
+    let hashes = ctx.hashes;
+    let wad = ctx.wad;
     match rule {
         DetectionRule::MissingOrWrongField {
             entry_type,
@@ -78,7 +83,31 @@ pub fn detect_issue(
             main_entry_type,
             targets,
         } => detect_unreferenced_entries(tree, hashes, main_entry_type, targets),
+
+        DetectionRule::DeadEntryLink {
+            main_entry_type,
+            targets,
+        } => detect_dead_entry_link(ctx, main_entry_type, targets),
     }
+}
+
+/// Detect link fields on the main entry that reference targets defined
+/// nowhere reachable. Fails open (returns false) without a loaded hash
+/// dictionary or without a `GameProvider` — without game knowledge we
+/// cannot distinguish "genuinely dead" from "resolved by the game".
+fn detect_dead_entry_link(
+    ctx: &FixContext,
+    main_entry_type: &str,
+    targets: &[EntryValidationTarget],
+) -> bool {
+    if !ctx.hashes.is_loaded() {
+        return false;
+    }
+    if ctx.game.is_none() {
+        return false;
+    }
+
+    !collect_dead_links(ctx, main_entry_type, targets).is_empty()
 }
 
 fn detect_missing_or_wrong_field(
@@ -635,6 +664,27 @@ mod tests {
         }
     }
 
+    /// Build a minimal `FixContext` for detection tests.
+    fn test_ctx<'a>(
+        tree: BinTree,
+        hashes: &'a dyn HashProvider,
+        wad: &'a dyn WadProvider,
+        champions: &'a hematite_types::champion::CharacterRelations,
+    ) -> FixContext<'a> {
+        FixContext {
+            tree,
+            hashes,
+            wad,
+            champions,
+            file_path: "test.bin".to_string(),
+            files_to_remove: Vec::new(),
+            linked_trees: HashMap::new(),
+            shader_validator: None,
+            game: None,
+            additional_bins: Vec::new(),
+        }
+    }
+
     #[test]
     fn test_detect_entry_type_exists() {
         let hashes = MockHashProvider::new();
@@ -652,7 +702,9 @@ mod tests {
         };
 
         let wad = MockWadProvider { paths: vec![] };
-        assert!(detect_issue(&rule, &tree, &hashes, &wad));
+        let champions = hematite_types::champion::CharacterRelations::default();
+        let ctx = test_ctx(tree, &hashes, &wad, &champions);
+        assert!(detect_issue(&rule, &ctx));
     }
 
     #[test]
@@ -681,12 +733,101 @@ mod tests {
             path_prefixes: vec![],
         };
 
+        let champions = hematite_types::champion::CharacterRelations::default();
+
         let wad = MockWadProvider { paths: vec![] };
-        assert!(detect_issue(&rule, &tree, &hashes, &wad));
+        let ctx = test_ctx(tree.clone(), &hashes, &wad, &champions);
+        assert!(detect_issue(&rule, &ctx));
 
         let wad_with_file = MockWadProvider {
             paths: vec!["test.dds".to_string()],
         };
-        assert!(!detect_issue(&rule, &tree, &hashes, &wad_with_file));
+        let ctx2 = test_ctx(tree, &hashes, &wad_with_file, &champions);
+        assert!(!detect_issue(&rule, &ctx2));
+    }
+
+    #[test]
+    fn test_detect_dead_entry_link_detected() {
+        let hashes = MockHashProvider::new();
+        let wad = MockWadProvider { paths: vec![] };
+        let champions = hematite_types::champion::CharacterRelations::default();
+
+        let mut tree = BinTree::default();
+        let mut main_obj = BinObject {
+            class_hash: TypeHash(0x1234),
+            path_hash: PathHash(0),
+            properties: IndexMap::new(),
+        };
+        main_obj.properties.insert(
+            0xCB52_2723,
+            BinProperty {
+                name_hash: FieldHash(0xCB52_2723),
+                value: PropertyValue::Container(vec![PropertyValue::Link(0x9999)]),
+            },
+        );
+        tree.objects.insert(0, main_obj);
+
+        let rule = DetectionRule::DeadEntryLink {
+            main_entry_type: "SkinCharacterDataProperties".to_string(),
+            targets: vec![EntryValidationTarget {
+                entry_type: "GearSkinUpgrade".to_string(),
+                type_hash: Some("0x27E0C761".to_string()),
+                reference_field: "skinUpgradeData".to_string(),
+                link_field: "0xcb522723".to_string(),
+            }],
+        };
+
+        let mut ctx = test_ctx(tree, &hashes, &wad, &champions);
+        struct EmptyGame;
+        impl crate::traits::GameProvider for EmptyGame {
+            fn has_path(&self, _p: &str) -> bool {
+                false
+            }
+            fn pull_raw(&self, _p: &str) -> Option<Vec<u8>> {
+                None
+            }
+            fn game_bin(&self, _p: &str) -> Option<BinTree> {
+                None
+            }
+        }
+        let game = EmptyGame;
+        ctx.game = Some(&game);
+
+        assert!(detect_issue(&rule, &ctx));
+    }
+
+    #[test]
+    fn test_detect_dead_entry_link_fails_open_without_game() {
+        let hashes = MockHashProvider::new();
+        let wad = MockWadProvider { paths: vec![] };
+        let champions = hematite_types::champion::CharacterRelations::default();
+
+        let mut tree = BinTree::default();
+        let mut main_obj = BinObject {
+            class_hash: TypeHash(0x1234),
+            path_hash: PathHash(0),
+            properties: IndexMap::new(),
+        };
+        main_obj.properties.insert(
+            0xCB52_2723,
+            BinProperty {
+                name_hash: FieldHash(0xCB52_2723),
+                value: PropertyValue::Container(vec![PropertyValue::Link(0x9999)]),
+            },
+        );
+        tree.objects.insert(0, main_obj);
+
+        let rule = DetectionRule::DeadEntryLink {
+            main_entry_type: "SkinCharacterDataProperties".to_string(),
+            targets: vec![EntryValidationTarget {
+                entry_type: "GearSkinUpgrade".to_string(),
+                type_hash: Some("0x27E0C761".to_string()),
+                reference_field: "skinUpgradeData".to_string(),
+                link_field: "0xcb522723".to_string(),
+            }],
+        };
+
+        let ctx = test_ctx(tree, &hashes, &wad, &champions); // ctx.game == None
+        assert!(!detect_issue(&rule, &ctx));
     }
 }

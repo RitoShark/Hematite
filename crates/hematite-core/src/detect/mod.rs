@@ -4,6 +4,7 @@
 //! Detection is read-only — it examines the BIN tree and returns true/false.
 
 pub mod bnk;
+pub mod dead_links;
 pub mod rules;
 pub mod shader;
 pub mod skin;
