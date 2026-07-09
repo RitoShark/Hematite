@@ -21,6 +21,7 @@ mod banner;
 mod deep_repair;
 mod hash_downloader;
 mod interactive;
+mod live_provider;
 mod logging;
 mod process;
 mod remote;
@@ -214,11 +215,47 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
 
     let start_time = Instant::now();
 
-    let selected_fixes = args::collect_selected_fixes(&cli);
+    let mut selected_fixes = args::collect_selected_fixes(&cli);
 
     let config = remote::load_fix_config();
     let champion_list = remote::load_champion_list();
     let champions = CharacterRelations::from_champion_list(&champion_list);
+
+    // -- Live-game source resolution ---------------------------------------
+    // Fail open: no install found (or --no-live) → live-game features are
+    // simply skipped; everything else still runs.
+    let live_provider: Option<live_provider::LiveGameProvider> = if cli.no_live {
+        None
+    } else {
+        let install = match &cli.game_path {
+            Some(p) => match hematite_live::LeagueInstall::from_path(p) {
+                Ok(i) => Some(i),
+                Err(e) => {
+                    tracing::warn!("--game-path invalid: {e}");
+                    None
+                }
+            },
+            None => hematite_live::detect_league(),
+        };
+        install.map(|i| {
+            live_provider::LiveGameProvider::new(
+                hematite_live::GameIndex::new(&i),
+                Box::new(hematite_file::bin_adapter::FileBinProvider::new()),
+            )
+        })
+    };
+    if live_provider.is_none() && !cli.no_live {
+        tracing::info!("No League install detected — live-game fixes will be skipped (fail open)");
+    }
+
+    // -- --restore-anm / --remove-anm interplay ----------------------------
+    let mut restore_anm = cli.restore_anm;
+    if restore_anm && cli.remove_anm {
+        tracing::warn!("--remove-anm and --restore-anm both set; --remove-anm wins");
+        restore_anm = false;
+    } else if restore_anm {
+        selected_fixes.retain(|f| f != "anm_remover");
+    }
 
     // Live progress UI — only renders in Normal verbosity. We
     // decide it BEFORE the session banner so the banner can be
@@ -279,6 +316,8 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         cli.check,
         repath_opts.as_ref(),
         ui,
+        live_provider.as_ref(),
+        restore_anm,
     )?;
 
     let duration = start_time.elapsed().as_secs_f64();

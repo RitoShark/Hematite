@@ -166,6 +166,21 @@ pub struct Cli {
         help = "Print version check status and exit without processing any input."
     )]
     pub check_version: bool,
+
+    // -- Live-game features ----------------------------------------------
+    #[arg(long, value_name = "DIR",
+          help = "Path to the League of Legends install (root or Game dir). \
+                  If omitted, hematite auto-detects the install. Live-game \
+                  features (deep repair, gear/CAC pull, ref ladder, --restore-anm) \
+                  use this.")]
+    pub game_path: Option<std::path::PathBuf>,
+
+    #[arg(long, help = "Disable all live-game features (no install detection, no game pulls)")]
+    pub no_live: bool,
+
+    #[arg(long, help = "Restore missing .anm animation files by pulling them from the game \
+                        (disables anm_remover for this run)")]
+    pub restore_anm: bool,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -200,7 +215,9 @@ const ALL_FIX_IDS: &[&str] = &[
     "staticmat_samplername",
     "black_icons",
     "dds_to_tex",
+    "resolve_dead_refs",
     "champion_bin_remover",
+    "combo_bin_relocate",
     "bnk_remover",
     "anm_remover",
     "dds_texture_converter",
@@ -209,6 +226,8 @@ const ALL_FIX_IDS: &[&str] = &[
     "vfx_shape_fix",
     "shader_fallback",
     "entry_validator",
+    "gear_pull",
+    "cac_pull",
 ];
 
 /// Collect selected fix IDs based on CLI flags.

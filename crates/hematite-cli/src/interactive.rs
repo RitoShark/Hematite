@@ -302,5 +302,8 @@ fn baseline_cli(input: PathBuf) -> Cli {
         verbosity: Verbosity::Normal,
         skip_version_check: false,
         check_version: false,
+        game_path: None,
+        no_live: false,
+        restore_anm: false,
     }
 }

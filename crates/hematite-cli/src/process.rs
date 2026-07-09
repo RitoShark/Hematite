@@ -2,11 +2,12 @@
 //!
 //! Routes input files to the appropriate processing pipeline based on file type.
 
+use crate::live_provider::LiveGameProvider;
 use anyhow::{Context, Result};
 use hematite_core::context::FixContext;
 use hematite_core::pipeline::apply_fixes;
 use hematite_core::repath as repath_core;
-use hematite_core::traits::{BinProvider, HashProvider};
+use hematite_core::traits::{BinProvider, GameProvider, HashProvider};
 use hematite_core::wad_pipeline::converters::ConverterRegistry;
 use hematite_file::{
     bin_adapter::FileBinProvider, hash_adapter::TxtHashProvider,
@@ -36,6 +37,14 @@ struct ProcessContext<'a> {
     /// and `-v quiet` — for those flows the existing tracing output or
     /// JSON pipe is the user-facing surface.
     ui: crate::ui::UiReporter,
+    /// Live game-file access (auto-detected install or `--game-path`).
+    /// `None` when `--no-live` was passed or no install was found — every
+    /// live-game feature must fail open in that case.
+    live: Option<&'a LiveGameProvider>,
+    /// Whether `--restore-anm` is active for this run. Not yet consumed by
+    /// any fix (wired for a follow-up task); read here so clippy doesn't
+    /// flag it as dead code.
+    restore_anm: bool,
 }
 
 /// Load hash provider with LMDB fallback to TXT.
@@ -117,6 +126,8 @@ pub fn process_input(
     check: bool,
     repath_opts: Option<&RepathOptions>,
     ui: crate::ui::UiReporter,
+    live: Option<&LiveGameProvider>,
+    restore_anm: bool,
 ) -> Result<ProcessResult> {
     // Load hash provider once for all files. The bar shows a stage
     // label so the user sees something happen during the (slow) LMDB
@@ -135,7 +146,16 @@ pub fn process_input(
         check,
         repath_opts,
         ui,
+        live,
+        restore_anm,
     };
+
+    if ctx.restore_anm {
+        tracing::debug!(
+            "--restore-anm active for this run (live: {})",
+            ctx.live.is_some()
+        );
+    }
 
     let mut total_result = ProcessResult::default();
 
@@ -221,12 +241,13 @@ fn process_bin_file(
     ctx: &ProcessContext<'_>,
     hash_provider: &Arc<dyn HashProvider>,
 ) -> Result<ProcessResult> {
-    let (config, selected_fixes, champions, dry_run, check) = (
+    let (config, selected_fixes, champions, dry_run, check, live) = (
         ctx.config,
         ctx.selected_fixes,
         ctx.champions,
         ctx.dry_run,
         ctx.check,
+        ctx.live,
     );
     let ui = ctx.ui.clone();
     ui.stage(&format!(
@@ -271,7 +292,7 @@ fn process_bin_file(
         file_path: file.to_string_lossy().to_string(),
         linked_trees: std::collections::HashMap::new(),
         shader_validator: shader_validator.as_ref(),
-        game: None,
+        game: live.map(|l| l as &dyn GameProvider),
         additional_bins: Vec::new(),
     };
 
@@ -332,13 +353,14 @@ fn process_wad_file(
     ctx: &ProcessContext<'_>,
     hash_provider: &Arc<dyn HashProvider>,
 ) -> Result<ProcessResult> {
-    let (config, selected_fixes, champions, dry_run, check, repath_opts) = (
+    let (config, selected_fixes, champions, dry_run, check, repath_opts, live) = (
         ctx.config,
         ctx.selected_fixes,
         ctx.champions,
         ctx.dry_run,
         ctx.check,
         ctx.repath_opts,
+        ctx.live,
     );
     use hematite_core::wad_pipeline;
     use hematite_file::wad_adapter::WadFile;
@@ -405,6 +427,15 @@ fn process_wad_file(
                     names.join(", ")
                 ));
                 tracing::info!("WAD contains subchampion forms: {}", names.join(", "));
+            }
+
+            // Prime the live GameIndex with the seed champions' base WADs
+            // (plus their related forms) so downstream live-game fixes
+            // (gear/CAC pull, ref ladder, --restore-anm) have the right
+            // champion data loaded without an extra pass. Fails open: a
+            // missing WAD for any one champion is just a debug log.
+            if let Some(live) = live {
+                prime_champion_wads(live, champions, unique_champs.iter().copied());
             }
         }
     }
@@ -689,7 +720,7 @@ fn process_wad_file(
             file_path: path.clone(),
             linked_trees: linked_only.clone(),
             shader_validator: shader_validator.as_ref(),
-            game: None,
+            game: live.map(|l| l as &dyn GameProvider),
             additional_bins: Vec::new(),
         };
 
@@ -1040,6 +1071,30 @@ fn process_wad_file(
     Ok(total_result)
 }
 
+/// Prime the live `GameIndex` with each seed champion's base WAD plus any
+/// related forms (e.g. Anivia → Egg, Annie → Tibbers) so downstream
+/// live-game fixes (gear/CAC pull, dead-ref resolution, `--restore-anm`)
+/// see the right champion data already loaded. Fails open per-champion —
+/// a WAD that isn't found is just a debug log inside `GameIndex::add_champion`.
+fn prime_champion_wads<'a>(
+    live: &LiveGameProvider,
+    champions: &CharacterRelations,
+    seed_champions: impl Iterator<Item = &'a str>,
+) {
+    for champ in seed_champions {
+        live.with_index(|idx| {
+            idx.add_champion(champ);
+        });
+        if let Some(related) = champions.get_subchamps(champ) {
+            for form in related {
+                live.with_index(|idx| {
+                    idx.add_champion(form);
+                });
+            }
+        }
+    }
+}
+
 /// Check if a path is a WAD folder.
 fn is_wad_folder(path: &Path) -> bool {
     if !path.is_dir() {
@@ -1071,13 +1126,14 @@ fn process_wad_folder(
     ctx: &ProcessContext<'_>,
     hash_provider: &Arc<dyn HashProvider>,
 ) -> Result<ProcessResult> {
-    let (config, selected_fixes, champions, dry_run, check, repath_opts) = (
+    let (config, selected_fixes, champions, dry_run, check, repath_opts, live) = (
         ctx.config,
         ctx.selected_fixes,
         ctx.champions,
         ctx.dry_run,
         ctx.check,
         ctx.repath_opts,
+        ctx.live,
     );
     use hematite_core::wad_pipeline;
     use hematite_file::wad_adapter::{wad_path_hash, FileWadProvider};
@@ -1150,6 +1206,10 @@ fn process_wad_folder(
                     "WAD folder contains subchampion forms: {}",
                     names.join(", ")
                 );
+            }
+
+            if let Some(live) = live {
+                prime_champion_wads(live, champions, unique_champs.iter().copied());
             }
         }
     }
@@ -1381,7 +1441,7 @@ fn process_wad_folder(
             file_path: path.clone(),
             linked_trees: linked_only.clone(),
             shader_validator: shader_validator.as_ref(),
-            game: None,
+            game: live.map(|l| l as &dyn GameProvider),
             additional_bins: Vec::new(),
         };
 

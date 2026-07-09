@@ -25,3 +25,4 @@ indexmap = { version = "2.7", features = ["serde"] }
 hematite-types = { path = "crates/hematite-types" }
 hematite-core = { path = "crates/hematite-core" }
 hematite-file = { path = "crates/hematite-file" }
+hematite-live = { path = "crates/hematite-live" }

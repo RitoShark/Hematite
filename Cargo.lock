@@ -752,6 +752,7 @@ dependencies = [
  "const_format",
  "hematite-core",
  "hematite-file",
+ "hematite-live",
  "hematite-types",
  "indicatif",
  "reqwest",
