@@ -298,6 +298,17 @@ pub enum TransformAction {
         #[serde(default)]
         nuke_fallback_field: Option<String>,
     },
+
+    /// Rewrite dead asset-path strings to a live form, consulting both the mod
+    /// WAD and the live game index. Ladder per string: exact-in-mod → skip;
+    /// exact-in-game → skip; ext-twin in mod → rewrite; ext-twin in game →
+    /// rewrite; inner-suffix-strip in game → rewrite; strip+twin in game →
+    /// rewrite. No-op without a game provider.
+    #[serde(rename = "resolve_dead_refs")]
+    ResolveDeadRefs {
+        /// Extensions to consider (no leading dot), e.g. ["dds","tex","anm","skn","skl","scb","sco"].
+        extensions: Vec<String>,
+    },
 }
 
 /// Parent embed to create when EnsureField target doesn't exist yet.

@@ -16,6 +16,7 @@
 //! | [`shader_fallback`] | `ShaderFallback` | ShaderValidator token matching |
 //! | [`remove_unreferenced`] | `RemoveUnreferencedEntries` | Link collection + entry removal |
 //! | [`pull_entries`] | `PullEntriesFromGame` | dead_links detection + game closure BFS |
+//! | [`resolve_refs`] | `ResolveDeadRefs` | PropertyWalker (visit_string) + game-TOC ladder |
 
 pub mod change_type;
 pub mod ensure_field;
@@ -26,6 +27,7 @@ pub mod remove;
 pub mod remove_unreferenced;
 pub mod rename_hash;
 pub mod replace_ext;
+pub mod resolve_refs;
 pub mod shader_fallback;
 pub mod split_entries;
 pub mod vfx_shape;
@@ -113,6 +115,7 @@ pub fn apply_transform(
             targets,
             nuke_fallback_field,
         } => pull_entries::apply(ctx, main_entry_type, targets, nuke_fallback_field.as_deref()),
+        TransformAction::ResolveDeadRefs { extensions } => resolve_refs::apply(ctx, extensions),
         TransformAction::SplitEntriesByType {
             entry_types,
             output_path_template,
