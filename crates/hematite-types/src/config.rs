@@ -283,6 +283,21 @@ pub enum TransformAction {
     /// Merge linked spell/anim BINs into the champion's main BIN.
     #[serde(rename = "merge_linked_bins")]
     MergeLinkedBins,
+
+    /// Pull referenced-but-missing target entries out of the live game's BIN
+    /// closure and inject them into this tree. Unpullable links either nuke
+    /// a fallback field on the main entry (gear: "skinUpgradeData") or drop
+    /// the dead link value (CAC).
+    #[serde(rename = "pull_entries_from_game")]
+    PullEntriesFromGame {
+        main_entry_type: String,
+        targets: Vec<EntryValidationTarget>,
+        /// Field (by name) on the main entry to REMOVE when a target link
+        /// cannot be pulled. `None` = drop only the dead link value from
+        /// its container.
+        #[serde(default)]
+        nuke_fallback_field: Option<String>,
+    },
 }
 
 /// Parent embed to create when EnsureField target doesn't exist yet.

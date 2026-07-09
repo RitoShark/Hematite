@@ -15,10 +15,12 @@
 //! | [`remove`] | `RemoveFromWad` | (trivial) |
 //! | [`shader_fallback`] | `ShaderFallback` | ShaderValidator token matching |
 //! | [`remove_unreferenced`] | `RemoveUnreferencedEntries` | Link collection + entry removal |
+//! | [`pull_entries`] | `PullEntriesFromGame` | dead_links detection + game closure BFS |
 
 pub mod change_type;
 pub mod ensure_field;
 pub mod merge_linked;
+pub mod pull_entries;
 pub mod regex_ops;
 pub mod remove;
 pub mod remove_unreferenced;
@@ -106,6 +108,11 @@ pub fn apply_transform(
             main_entry_type,
             targets,
         } => remove_unreferenced::apply(ctx, main_entry_type, targets),
+        TransformAction::PullEntriesFromGame {
+            main_entry_type,
+            targets,
+            nuke_fallback_field,
+        } => pull_entries::apply(ctx, main_entry_type, targets, nuke_fallback_field.as_deref()),
         TransformAction::SplitEntriesByType {
             entry_types,
             output_path_template,
