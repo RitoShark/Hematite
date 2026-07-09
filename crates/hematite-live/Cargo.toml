@@ -1,0 +1,19 @@
+[package]
+name = "hematite-live"
+description = "Live League of Legends game file access: install detection, TOC-only WAD reading, game index"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror = "1"
+tracing = "0.1"
+walkdir = "2"
+serde_json.workspace = true
+sysinfo = "0.30"
+flate2 = "1"
+zstd = "0.13"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+[dev-dependencies]
+tempfile = "3"

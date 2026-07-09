@@ -5,6 +5,7 @@ members = [
     "crates/hematite-core",
     "crates/hematite-file",
     "crates/hematite-cli",
+    "crates/hematite-live",
 ]
 
 [workspace.package]
