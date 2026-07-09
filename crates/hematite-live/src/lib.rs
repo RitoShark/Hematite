@@ -5,8 +5,10 @@
 //! very large base-game WADs.
 
 pub mod chunk;
+pub mod detect;
 pub mod error;
 pub mod toc;
 
+pub use detect::{detect_league, LeagueInstall};
 pub use error::LiveError;
 pub use toc::{read_toc, read_toc_from, Compression, TocChunk, WadToc};
