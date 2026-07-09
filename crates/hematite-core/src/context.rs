@@ -5,7 +5,7 @@
 //! and champion relationship data.
 
 use crate::detect::shader::ShaderValidator;
-use crate::traits::{HashProvider, WadProvider};
+use crate::traits::{GameProvider, HashProvider, WadProvider};
 use hematite_types::bin::BinTree;
 use hematite_types::champion::CharacterRelations;
 use std::collections::HashMap;
@@ -38,6 +38,10 @@ pub struct FixContext<'a> {
 
     /// Shader validator for shader fallback fixes (optional).
     pub shader_validator: Option<&'a ShaderValidator>,
+
+    /// Live base-game file access for pull fixes (optional). `None` means
+    /// fail open / skip any fix that depends on live game data.
+    pub game: Option<&'a dyn GameProvider>,
 
     /// Additional BIN files produced by this fix session. Populated by
     /// transforms that split entries out of the source BIN into their own

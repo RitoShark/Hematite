@@ -271,6 +271,7 @@ fn process_bin_file(
         file_path: file.to_string_lossy().to_string(),
         linked_trees: std::collections::HashMap::new(),
         shader_validator: shader_validator.as_ref(),
+        game: None,
         additional_bins: Vec::new(),
     };
 
@@ -688,6 +689,7 @@ fn process_wad_file(
             file_path: path.clone(),
             linked_trees: linked_only.clone(),
             shader_validator: shader_validator.as_ref(),
+            game: None,
             additional_bins: Vec::new(),
         };
 
@@ -1379,6 +1381,7 @@ fn process_wad_folder(
             file_path: path.clone(),
             linked_trees: linked_only.clone(),
             shader_validator: shader_validator.as_ref(),
+            game: None,
             additional_bins: Vec::new(),
         };
 

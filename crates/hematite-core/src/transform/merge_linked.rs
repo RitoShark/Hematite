@@ -131,6 +131,7 @@ mod tests {
             files_to_remove: Vec::new(),
             linked_trees,
             shader_validator: None,
+            game: None,
             additional_bins: Vec::new(),
         };
 

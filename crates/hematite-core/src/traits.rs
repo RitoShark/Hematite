@@ -70,3 +70,42 @@ pub trait WadProvider: Send + Sync {
     /// Check if a raw xxhash64 exists in the WAD.
     fn has_hash(&self, hash: u64) -> bool;
 }
+
+/// Abstraction over live base-game file access. Implementations wrap an
+/// installed League of Legends client (see hematite-live) and are internally
+/// mutable (&self methods) so they can share a FixContext with other borrows.
+pub trait GameProvider: Send + Sync {
+    /// Does the base game ship this path?
+    fn has_path(&self, path: &str) -> bool;
+    /// Raw bytes of a game file (None when absent or unreadable).
+    fn pull_raw(&self, path: &str) -> Option<Vec<u8>>;
+    /// Pull AND parse a game BIN into hematite's tree model.
+    /// (Parsing happens inside the impl — core stays format-free.)
+    fn game_bin(&self, path: &str) -> Option<BinTree>;
+}
+
+#[cfg(test)]
+mod game_provider_tests {
+    use super::*;
+
+    struct NullGame;
+    impl GameProvider for NullGame {
+        fn has_path(&self, _p: &str) -> bool {
+            false
+        }
+        fn pull_raw(&self, _p: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn game_bin(&self, _p: &str) -> Option<BinTree> {
+            None
+        }
+    }
+
+    #[test]
+    fn game_provider_is_object_safe() {
+        let g: &dyn GameProvider = &NullGame;
+        assert!(!g.has_path("data/x.bin"));
+        assert!(g.pull_raw("x").is_none());
+        assert!(g.game_bin("x").is_none());
+    }
+}
