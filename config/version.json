@@ -1,7 +1,7 @@
 {
-    "latest_cli_version": "0.4.1",
+    "latest_cli_version": "0.5.0",
     "min_cli_version": "0.4.1",
     "download_url": "https://github.com/RitoShark/Hematite/releases/latest",
-    "release_notes": "Fix SCO to SCB mesh conversion, texture dimensions, and path/extension alignment in repathing",
+    "release_notes": "Live game detection: auto-detects your League install so deep repair, gear/CAC pull fixes, animation restore, and combo-bin relocation work with zero flags",
     "advisories": []
 }

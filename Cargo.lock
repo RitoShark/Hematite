@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-cli"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "hematite-types",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-file"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "heed",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-live"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "flate2",
  "serde_json",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-types"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "indexmap",
  "serde",

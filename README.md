@@ -103,6 +103,26 @@ Full architecture, transform framework, contribution flow → **[DEVELOPER.md](D
 <tr>
 <td>
 
+### Live game detection
+- **Auto-detects your League install** (Riot client manifest → running processes → common paths → registry) — no flags needed
+- **Deep repair without `--game-wad`** — champion WADs resolve automatically from the detected install
+- **`--game-path <DIR>`** to point at a specific install, **`--no-live`** to opt out
+
+</td>
+<td>
+
+### Pull fixes (from the live game)
+- **Gear pull** — dead `mGearSkinUpgrades` links (a confirmed crash) are repaired by pulling the missing entry from the game; unpullable ones are safely nuked
+- **CAC pull** — missing `ContextualActionData` restored so voiceovers work
+- **`--restore-anm`** — pulls dead `.anm` references from the game instead of deleting them
+- **Combo-bin relocation** — legacy `data/{champ}_skins_*.bin` re-keyed to Riot's new `_multi_skins_` path
+- **Dead-reference ladder** — dead asset refs rewritten to a live form (`.dds`↔`.tex`, suffix-strip) using the game's own file list
+
+</td>
+</tr>
+<tr>
+<td>
+
 ### Texture lifesavers
 - **Mipmap stripping** for the post-2026 League regression that ate mipmapped textures
 - **TEX dimension repair** — rounds non-block-aligned `.tex` dimensions down to multiples of 4 (no more DXT-block crashes)
@@ -187,7 +207,11 @@ hematite-cli "MyAwesomeSkin.fantome"
 | `--dry-run` | Show what *would* be fixed |
 | `--json` | Emit machine-readable output (skips the "press enter" pause) |
 | `--repath` | Rename mod assets with a unique prefix so they can't collide with the base game |
-| `--game-wad <PATH>` | **Deep repair** (requires `--repath`): make the mod self-contained by pulling missing dependencies from the base-game champion WAD. Backfills the canonical `skin{N}.bin` for asset-only mods, then transitively resolves every referenced + linked file until the dependency chain is closed |
+| `--game-wad <PATH>` | **Deep repair** from a specific base-game champion WAD (optional — with a detected install, deep repair runs automatically when `--repath` is set). Backfills the canonical `skin{N}.bin` for asset-only mods, then transitively resolves every referenced + linked file until the dependency chain is closed |
+| `--game-path <DIR>` | Point at a League install explicitly (otherwise auto-detected) |
+| `--no-live` | Disable all live-game features for this run |
+| `--restore-anm` | Pull missing `.anm` animations from the game instead of removing them |
+| `--pull-gear` / `--pull-cac` / `--fix-refs` / `--relocate-bins` | Select the new pull fixes individually (all run by default) |
 | `--invis-texture` | Inject invisible placeholders for missing texture refs after repath |
 | `-v verbose` | Show every fix as it's applied; `-v trace` for everything |
 

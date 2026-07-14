@@ -33,21 +33,23 @@ For the user-facing intro see [README.md](README.md).
 
 ## Architecture
 
-4-crate Rust workspace. The fix engine **never imports the file-format
+5-crate Rust workspace. The fix engine **never imports the file-format
 crates** — when those crates change their API, only the adapter crate
 needs updating. (The adapter currently wraps the RitoShark `rs_*`
 crates, which the team owns; it previously wrapped `league-toolkit`.)
 
 ```mermaid
 graph TD
-    CLI[hematite-cli<br/><sub>args · logging · file routing · remote config · version gate · deep-repair</sub>]
+    CLI[hematite-cli<br/><sub>args · logging · file routing · remote config · version gate · deep-repair · restore-anm · combo relocation</sub>]
     CORE[hematite-core<br/><sub>detection · transforms · walker · seeds · assets registry</sub>]
     FILE[hematite-file<br/><sub>BIN/WAD/texture adapters · the only crate importing the rs_* format crates</sub>]
     TYPES[hematite-types<br/><sub>pure data types · config schema · hash newtypes</sub>]
+    LIVE[hematite-live<br/><sub>League install detection · TOC-only WAD reader · GameIndex</sub>]
     LEAGUE[("RitoShark rs_* crates<br/>rs_bin · rs_wad · rs_tex · rs_mesh · rs_io")]
 
     CLI --> CORE
     CLI --> FILE
+    CLI --> LIVE
     CORE --> TYPES
     FILE --> TYPES
     FILE --> LEAGUE
@@ -60,7 +62,8 @@ Crate purpose:
 | `hematite-types` | Pure data: `BinTree`, `FixConfig`, `RepathOptions`, hash newtypes. No deps on parsing libs. |
 | `hematite-core` | Fix engine: detection rules, transform actions, BFS walker, fallback, repath, seed discovery, asset registry. Operates against trait abstractions. |
 | `hematite-file` | The **only** crate that touches the file-format crates (the RitoShark `rs_*` crates: `rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`). Provides `BinProvider`, `HashProvider`, `WadProvider` implementations, plus texture converters (DDS↔TEX, strip-mipmaps, fix-dimensions). |
-| `hematite-cli` | Binary: CLI args, logging, file-type routing, remote config fetching, the version-gate, batch orchestration. |
+| `hematite-cli` | Binary: CLI args, logging, file-type routing, remote config fetching, the version-gate, batch orchestration. Hosts the live-game glue: `LiveGameProvider` (implements `hematite-core`'s `GameProvider`), deep repair, restore-anm, combo-bin relocation. |
+| `hematite-live` | Standalone live-game access (no rs_*/hematite deps): League install auto-detection (Riot manifest → processes → common paths → registry), TOC-only WAD reader (never loads whole game WADs), per-chunk decompression, lazy multi-WAD `GameIndex`. |
 
 ```
 hematite-v2/
@@ -68,6 +71,7 @@ hematite-v2/
 │   ├── hematite-types/   pure data types, config schema, hash newtypes
 │   ├── hematite-core/    fix engine
 │   ├── hematite-file/    rs_* format-crate adapter + byte-level texture work
+│   ├── hematite-live/    League install detection + live game file access
 │   └── hematite-cli/     CLI binary
 ├── config/
 │   ├── fix_config.json       fix rule definitions (remote-fetched, embedded fallback)
