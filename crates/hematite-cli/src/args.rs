@@ -134,9 +134,11 @@ pub struct Cli {
         value_name = "PATH",
         help = "Path to the base-game champion .wad.client (e.g. \
                 \"C:/Riot Games/.../Champions/ahri.wad.client\"). \
-                When set, files referenced by BIN strings but missing from the mod \
-                are extracted from this WAD and included in the output, so the \
-                repathed mod is fully self-contained. Requires --repath."
+                When set with --repath, files referenced by BIN strings but missing \
+                from the mod are extracted from this WAD and included in the output, \
+                so the repathed mod is fully self-contained. Also used by \
+                --restore-anm as its game source when no live install is available, \
+                independent of --repath."
     )]
     pub game_wad: Option<std::path::PathBuf>,
 

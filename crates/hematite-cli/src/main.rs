@@ -16,6 +16,7 @@
 //! All three converge on [`run_with_cli`], the single source of truth
 //! for what a fix session does.
 
+mod anm_restore;
 mod args;
 mod banner;
 mod deep_repair;
@@ -318,6 +319,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         ui,
         live_provider.as_ref(),
         restore_anm,
+        cli.game_wad.as_deref(),
     )?;
 
     let duration = start_time.elapsed().as_secs_f64();

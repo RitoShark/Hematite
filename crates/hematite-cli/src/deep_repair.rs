@@ -147,7 +147,10 @@ pub fn canonical_seed_bin_paths(seed: &SkinSeed) -> Vec<String> {
 ///
 /// Returns `Ok(None)` when the file (and all its alternates) is absent from
 /// the game WAD.
-fn pull_one(
+///
+/// `pub(crate)` so [`crate::anm_restore`] can reuse the same suffix-strip +
+/// canonical resolution ladder instead of duplicating it.
+pub(crate) fn pull_one(
     requested: &str,
     source: &mut dyn GamePullSource,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,

@@ -41,10 +41,13 @@ struct ProcessContext<'a> {
     /// `None` when `--no-live` was passed or no install was found — every
     /// live-game feature must fail open in that case.
     live: Option<&'a LiveGameProvider>,
-    /// Whether `--restore-anm` is active for this run. Not yet consumed by
-    /// any fix (wired for a follow-up task); read here so clippy doesn't
-    /// flag it as dead code.
+    /// Whether `--restore-anm` is active for this run.
     restore_anm: bool,
+    /// `--game-wad`, threaded independently of `repath_opts` so
+    /// `--restore-anm` can use it as a game source even when `--repath`
+    /// wasn't passed (unlike `RepathOptions::game_wad`, which is only
+    /// populated when repathing is active).
+    game_wad: Option<&'a Path>,
 }
 
 /// Load hash provider with LMDB fallback to TXT.
@@ -128,6 +131,7 @@ pub fn process_input(
     ui: crate::ui::UiReporter,
     live: Option<&LiveGameProvider>,
     restore_anm: bool,
+    game_wad: Option<&Path>,
 ) -> Result<ProcessResult> {
     // Load hash provider once for all files. The bar shows a stage
     // label so the user sees something happen during the (slow) LMDB
@@ -148,12 +152,14 @@ pub fn process_input(
         ui,
         live,
         restore_anm,
+        game_wad,
     };
 
     if ctx.restore_anm {
         tracing::debug!(
-            "--restore-anm active for this run (live: {})",
-            ctx.live.is_some()
+            "--restore-anm active for this run (live: {}, game_wad: {})",
+            ctx.live.is_some(),
+            ctx.game_wad.is_some()
         );
     }
 
@@ -810,6 +816,23 @@ fn process_wad_file(
 
     // Update total files removed count
     total_result.files_removed = shared_files_to_remove.len() as u32;
+
+    // === RESTORE-ANM PIPELINE ===
+    // Independent of --repath: pulls missing .anm animation references
+    // from the live game (or --game-wad) so anm_remover never has to
+    // delete them. Must run after the BIN fix loop (so it sees the final
+    // set of BIN references) and before the WAD rebuild below.
+    if ctx.restore_anm {
+        if dry_run {
+            tracing::info!("[dry-run] Would restore missing .anm references from the game");
+        } else {
+            ui.stage("Restoring missing animations…");
+            let restored = run_restore_anm(&mut all_files, &bin_provider, ctx.game_wad, live);
+            if restored > 0 {
+                total_result.fixes_applied += restored;
+            }
+        }
+    }
 
     // === REPATH PIPELINE ===
     // Must run AFTER all BIN fixes so fixes operate on original paths.
@@ -1503,6 +1526,21 @@ fn process_wad_folder(
 
     total_result.files_removed = shared_files_to_remove.len() as u32;
 
+    // === RESTORE-ANM PIPELINE ===
+    // See process_wad_file's identical step for rationale — independent
+    // of --repath, must run before the WAD rebuild.
+    if ctx.restore_anm {
+        if dry_run {
+            tracing::info!("[dry-run] Would restore missing .anm references from the game");
+        } else {
+            ui.stage("Restoring missing animations…");
+            let restored = run_restore_anm(&mut all_files, &bin_provider, ctx.game_wad, live);
+            if restored > 0 {
+                total_result.fixes_applied += restored;
+            }
+        }
+    }
+
     // === REPATH PIPELINE ===
     if let Some(opts) = repath_opts {
         if !dry_run {
@@ -1987,4 +2025,61 @@ fn extract_missing_from_live(
 ) -> Result<u32> {
     let stats = crate::deep_repair::resolve_from_live(live, all_files, bin_provider, opts)?;
     Ok(stats.files_pulled)
+}
+
+/// `--restore-anm` pipeline step: pull `.anm` animation references that the
+/// mod's own BINs point at but doesn't ship, out of the live game (or an
+/// explicit `--game-wad`), instead of leaving them dangling for
+/// `anm_remover` to delete.
+///
+/// Runs independently of `--repath` — unlike deep repair's game-file pull
+/// (which only fires inside the repath branch because it exists to make a
+/// *repathed* mod self-contained), animation restoration is useful for any
+/// mod, repathed or not. Source priority mirrors deep repair: an explicit
+/// `--game-wad` file wins over the auto-detected live index. Fails open —
+/// with neither source available this is an info log and a no-op, never a
+/// hard error.
+fn run_restore_anm(
+    all_files: &mut Vec<(u64, String, Vec<u8>)>,
+    bin_provider: &FileBinProvider,
+    game_wad: Option<&Path>,
+    live: Option<&LiveGameProvider>,
+) -> u32 {
+    use crate::anm_restore::restore_missing_anms;
+    use crate::deep_repair::{LiveSource, WadFileSource};
+
+    let stats = if let Some(game_wad_path) = game_wad {
+        match WadFileSource::open(game_wad_path) {
+            Ok(mut source) => Some(restore_missing_anms(all_files, bin_provider, &mut source)),
+            Err(e) => {
+                tracing::warn!(
+                    "--restore-anm: failed to open --game-wad {}: {}",
+                    game_wad_path.display(),
+                    e
+                );
+                None
+            }
+        }
+    } else if let Some(live) = live {
+        let mut source = LiveSource::new(live);
+        Some(restore_missing_anms(all_files, bin_provider, &mut source))
+    } else {
+        tracing::info!(
+            "--restore-anm: no live game install detected and no --game-wad given — skipping"
+        );
+        None
+    };
+
+    match stats {
+        Some(stats) => {
+            tracing::info!(
+                "Restored {} animation(s), {} unresolved ({} referenced)",
+                stats.restored,
+                stats.still_missing,
+                stats.refs_found
+            );
+            stats.restored
+        }
+        None => 0,
+    }
 }
