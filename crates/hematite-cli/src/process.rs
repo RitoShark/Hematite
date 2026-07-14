@@ -822,8 +822,11 @@ fn process_wad_file(
                 opts.layout
             );
 
-            // 0. If --game-wad is provided, extract missing referenced files
-            //    from the base-game WAD so the mod becomes fully self-contained.
+            // 0. Extract missing referenced files from the base-game so the
+            //    mod becomes fully self-contained. Prefer an explicit
+            //    --game-wad (unchanged, byte-identical behavior); otherwise
+            //    fall back to the auto-detected live game index when one is
+            //    available. Neither present → deep repair is skipped.
             let mut game_files_added = 0u32;
             if let Some(ref game_wad_path) = opts.game_wad {
                 game_files_added = extract_missing_from_game_wad(
@@ -833,6 +836,9 @@ fn process_wad_file(
                     hash_provider.as_ref(),
                     opts,
                 )?;
+            } else if let Some(live) = live {
+                game_files_added =
+                    extract_missing_from_live(live, &mut all_files, &bin_provider, opts)?;
             }
 
             // 1. Build a path+hash index of every WAD entry so BIN strings
@@ -1510,6 +1516,9 @@ fn process_wad_folder(
                     hash_provider.as_ref(),
                     opts,
                 )?;
+            } else if let Some(live) = live {
+                game_files_added =
+                    extract_missing_from_live(live, &mut all_files, &bin_provider, opts)?;
             }
 
             let index = repath_core::WadIndex::from_entries(
@@ -1960,5 +1969,22 @@ fn extract_missing_from_game_wad(
         hash_provider,
         opts,
     )?;
+    Ok(stats.files_pulled)
+}
+
+/// Make the mod self-contained by pulling missing dependencies out of the
+/// auto-detected, multi-WAD live game index instead of a single explicit
+/// `--game-wad` file. Same capabilities as [`extract_missing_from_game_wad`]
+/// (seed-BIN backfill + transitive dependency closure) — only the byte
+/// source differs.
+///
+/// Returns the total number of files pulled from the live index.
+fn extract_missing_from_live(
+    live: &LiveGameProvider,
+    all_files: &mut Vec<(u64, String, Vec<u8>)>,
+    bin_provider: &FileBinProvider,
+    opts: &RepathOptions,
+) -> Result<u32> {
+    let stats = crate::deep_repair::resolve_from_live(live, all_files, bin_provider, opts)?;
     Ok(stats.files_pulled)
 }
