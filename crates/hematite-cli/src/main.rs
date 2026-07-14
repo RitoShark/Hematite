@@ -309,10 +309,11 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         }
     };
 
-    // Not yet reachable via `--all`/`collect_selected_fixes` (its config
-    // rule lands in a later task) — honor it directly so it activates
-    // automatically once that config entry exists and starts populating
-    // `selected_fixes`.
+    // `combo_bin_relocate` has no BIN-level detect/apply of its own (its
+    // config entry in `wad_fixes` is a descriptor only, see fix_config.json)
+    // — the actual relocation is this dedicated pipeline step, gated the
+    // same way `selected_fixes` reaches it: via `--relocate-bins`, `--all`,
+    // or no-flags default (both populate it through `ALL_FIX_IDS`).
     let relocate_combo_bins = selected_fixes.iter().any(|f| f == "combo_bin_relocate");
 
     let result = process::process_input(

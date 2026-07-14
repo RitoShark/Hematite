@@ -7,7 +7,7 @@
 //!
 //! `collect_dead_links` is shared: this module's detection rule uses it to
 //! decide whether an issue exists, and the `pull_entries_from_game`
-//! transform (a later task) reuses it to know exactly which links to repair.
+//! transform reuses it to know exactly which links to repair.
 
 use crate::context::FixContext;
 use crate::filter;

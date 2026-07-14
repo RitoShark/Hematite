@@ -1,6 +1,6 @@
 {
-    "version": "2.1.0",
-    "last_updated": "2026-03-30",
+    "version": "2.2.0",
+    "last_updated": "2026-07-10",
     "repath": {
         "enabled": true,
         "prefix": "hematite",
@@ -248,6 +248,82 @@
                 ]
             }
         },
+        "gear_pull": {
+            "name": "Dead Gear Link Repair",
+            "description": "Pulls GearSkinUpgrade entries referenced by mGearSkinUpgrades but missing from the mod out of the live game BIN closure (confirmed crash otherwise). Nukes skinUpgradeData as last resort.",
+            "enabled": true,
+            "severity": "critical",
+            "detect": {
+                "type": "dead_entry_link",
+                "main_entry_type": "SkinCharacterDataProperties",
+                "targets": [
+                    {
+                        "entry_type": "GearSkinUpgrade",
+                        "type_hash": "0x27E0C761",
+                        "reference_field": "skinUpgradeData",
+                        "link_field": "0xcb522723"
+                    }
+                ]
+            },
+            "apply": {
+                "type": "pull_entries_from_game",
+                "main_entry_type": "SkinCharacterDataProperties",
+                "targets": [
+                    {
+                        "entry_type": "GearSkinUpgrade",
+                        "type_hash": "0x27E0C761",
+                        "reference_field": "skinUpgradeData",
+                        "link_field": "0xcb522723"
+                    }
+                ],
+                "nuke_fallback_field": "skinUpgradeData"
+            }
+        },
+        "cac_pull": {
+            "name": "Voiceover (CAC) Restore",
+            "description": "Pulls ContextualActionData entries referenced by the skin but missing from the mod out of the live game BIN closure, restoring voiceovers. Unpullable links are dropped.",
+            "enabled": true,
+            "severity": "medium",
+            "detect": {
+                "type": "dead_entry_link",
+                "main_entry_type": "SkinCharacterDataProperties",
+                "targets": [
+                    {
+                        "entry_type": "ContextualActionData",
+                        "type_hash": "0xCF3A2F44",
+                        "reference_field": "contextualActionData",
+                        "link_field": "0xd8f64a0d"
+                    }
+                ]
+            },
+            "apply": {
+                "type": "pull_entries_from_game",
+                "main_entry_type": "SkinCharacterDataProperties",
+                "targets": [
+                    {
+                        "entry_type": "ContextualActionData",
+                        "type_hash": "0xCF3A2F44",
+                        "reference_field": "contextualActionData",
+                        "link_field": "0xd8f64a0d"
+                    }
+                ]
+            }
+        },
+        "resolve_dead_refs": {
+            "name": "Dead Reference Ladder",
+            "description": "Rewrites dead asset references to a live form using the installed game as ground truth: .dds↔.tex / .sco↔.scb twins and Riot's inner-suffix-stripped renames. Skips anything the mod or game actually ships. Detection uses the .dds extension scan as a cheap trigger (misses pure-.anm-only cases); the transform then re-checks and fixes all extensions in the BIN, so this is a safe no-op when nothing is dead.",
+            "enabled": true,
+            "severity": "high",
+            "detect": {
+                "type": "recursive_string_extension_not_in_wad",
+                "extension": ".dds",
+                "path_prefixes": []
+            },
+            "apply": {
+                "type": "resolve_dead_refs",
+                "extensions": ["dds", "tex", "anm", "skn", "skl", "scb", "sco"]
+            }
+        },
         "vfx_entry_split": {
             "name": "VFX Entry Separation",
             "description": "Extracts every VfxSystemDefinitionData entry into a sibling BIN at {champion}_vfx_skin{skin}.bin and links it from the source. Reduces skin0.bin bloat and matches the layout Riot ships natively. Disabled by default until validated on real mods.",
@@ -418,6 +494,21 @@
                         "only_if_missing": true
                     }
                 ]
+            }
+        },
+        "combo_bin_relocate": {
+            "name": "Legacy Combo-Bin Relocation",
+            "description": "Descriptor only — the actual re-key of legacy data/<champ>_skins_<slots>.bin entries to data/characters/<champ>/<champ>_multi_skins_<slots>.bin runs as a dedicated CLI pipeline step (crates/hematite-cli/src/combo_relocate.rs) gated on this fix id, not through this rule's detect/apply. This entry exists only so the fix id resolves in config for reporting/--check and the ALL_FIX_IDS guard test. The rename pattern below intentionally never matches (^$ matches only the empty string), so it is a guaranteed no-op if the WAD pipeline ever evaluates it directly.",
+            "enabled": true,
+            "severity": "low",
+            "detect": {
+                "type": "file_pattern",
+                "pattern": "data/*_skins_*.bin"
+            },
+            "apply": {
+                "type": "rename_file",
+                "pattern": "^$",
+                "replacement": ""
             }
         }
     }

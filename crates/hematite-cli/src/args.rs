@@ -10,6 +10,10 @@
 //! | `--remove-champion-bins` | Remove outdated champion data |
 //! | `--remove-bnk` | Remove incompatible audio files |
 //! | `--vfx-shape` | VFX shape migration (14.1+) |
+//! | `--pull-gear` | Pull missing GearSkinUpgrade entries from the live game |
+//! | `--pull-cac` | Pull missing ContextualActionData entries from the live game |
+//! | `--fix-refs` | Rewrite dead asset references using the live game |
+//! | `--relocate-bins` | Relocate legacy combo-bin WAD entries |
 //! | `--all` / `-a` | Enable all fixes |
 //!
 //! ## Output control
@@ -78,6 +82,30 @@ pub struct Cli {
 
     #[arg(long, help = "Fix non-block-aligned TEX texture dimensions")]
     pub fix_tex_dimensions: bool,
+
+    #[arg(
+        long,
+        help = "Pull missing GearSkinUpgrade entries from the live game (fixes dead gear links)"
+    )]
+    pub pull_gear: bool,
+
+    #[arg(
+        long,
+        help = "Pull missing ContextualActionData entries from the live game (restores voiceovers)"
+    )]
+    pub pull_cac: bool,
+
+    #[arg(
+        long,
+        help = "Rewrite dead asset references to a live form using the installed game"
+    )]
+    pub fix_refs: bool,
+
+    #[arg(
+        long,
+        help = "Relocate legacy combo-bin WAD entries to their multi-skin path"
+    )]
+    pub relocate_bins: bool,
 
     #[arg(short, long, help = "Enable all fixes")]
     pub all: bool,
@@ -217,16 +245,24 @@ impl From<RepathLayoutArg> for hematite_types::repath::RepathLayout {
 /// ID absent from both maps, and main.rs bails on any error. Guarded by
 /// `all_fix_ids_exist_in_repo_config` below.
 ///
-/// The live-game fix IDs (`gear_pull`, `cac_pull`, `resolve_dead_refs`,
-/// `combo_bin_relocate`) are deliberately NOT listed yet: their config rules
-/// land in a later task, which re-adds them here.
+/// `apply_fixes` (see `hematite-core/src/pipeline.rs`) walks
+/// `selected_fix_ids` in the order given here, not config declaration order
+/// — so relative position in this list is load-bearing, not cosmetic.
+/// `gear_pull` and `cac_pull` pull missing entries out of the live game's
+/// BIN closure; they must run BEFORE `entry_validator`, which deletes
+/// unreferenced entries of the same types. Running entry_validator first
+/// would strip the very links gear_pull/cac_pull need to resolve, so they
+/// sit immediately before it despite `entry_validator` being declared
+/// earlier in `fix_config.json`.
 const ALL_FIX_IDS: &[&str] = &[
     "healthbar_fix",
     "staticmat_texturepath",
     "staticmat_samplername",
     "black_icons",
     "dds_to_tex",
+    "resolve_dead_refs",
     "champion_bin_remover",
+    "combo_bin_relocate",
     "bnk_remover",
     "anm_remover",
     "dds_texture_converter",
@@ -234,6 +270,8 @@ const ALL_FIX_IDS: &[&str] = &[
     "fix_tex_dimensions",
     "vfx_shape_fix",
     "shader_fallback",
+    "gear_pull",
+    "cac_pull",
     "entry_validator",
 ];
 
@@ -283,6 +321,18 @@ pub fn collect_selected_fixes(cli: &Cli) -> Vec<String> {
     if cli.fix_tex_dimensions {
         fixes.push("fix_tex_dimensions".into());
     }
+    if cli.pull_gear {
+        fixes.push("gear_pull".into());
+    }
+    if cli.pull_cac {
+        fixes.push("cac_pull".into());
+    }
+    if cli.fix_refs {
+        fixes.push("resolve_dead_refs".into());
+    }
+    if cli.relocate_bins {
+        fixes.push("combo_bin_relocate".into());
+    }
 
     // If --all or no specific flags: apply all fixes
     if cli.all || fixes.is_empty() {
@@ -324,5 +374,118 @@ mod tests {
              (fixes ∪ wad_fixes): {missing:?} — add the config rule first, \
              then list the ID here"
         );
+    }
+
+    /// Round-trip the repo's fix config and assert the new v2.2.0 rules
+    /// (`gear_pull`, `cac_pull`, `resolve_dead_refs`, `combo_bin_relocate`)
+    /// deserialize into the expected `DetectionRule`/`TransformAction`
+    /// variants with the fields the pipeline actually reads. Catches silent
+    /// schema drift (e.g. a typo'd `"type"` tag falling back to a serde
+    /// error, or a field name mismatch) that `all_fix_ids_exist_in_repo_config`
+    /// wouldn't — that test only checks key presence, not shape.
+    #[test]
+    fn new_v2_2_0_rules_parse_into_expected_variants() {
+        use hematite_types::config::{DetectionRule, TransformAction, WadDetectionRule, WadTransformAction};
+
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../config/fix_config.json");
+        let raw = std::fs::read_to_string(&config_path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", config_path.display()));
+        let config: hematite_types::config::FixConfig = serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("cannot parse {}: {e}", config_path.display()));
+
+        assert_eq!(config.version, "2.2.0");
+
+        // gear_pull: dead_entry_link detect + pull_entries_from_game apply
+        // with nuke_fallback_field set (last-resort fallback).
+        let gear_pull = config.fixes.get("gear_pull").expect("gear_pull rule missing");
+        assert!(gear_pull.enabled);
+        assert_eq!(gear_pull.severity, "critical");
+        match &gear_pull.detect {
+            DetectionRule::DeadEntryLink { main_entry_type, targets } => {
+                assert_eq!(main_entry_type, "SkinCharacterDataProperties");
+                assert_eq!(targets.len(), 1);
+                assert_eq!(targets[0].entry_type, "GearSkinUpgrade");
+                assert_eq!(targets[0].reference_field, "skinUpgradeData");
+            }
+            other => panic!("gear_pull.detect: expected DeadEntryLink, got {other:?}"),
+        }
+        match &gear_pull.apply {
+            TransformAction::PullEntriesFromGame { targets, nuke_fallback_field, .. } => {
+                assert_eq!(targets.len(), 1);
+                assert_eq!(
+                    nuke_fallback_field.as_deref(),
+                    Some("skinUpgradeData"),
+                    "gear_pull must nuke skinUpgradeData when the link can't be pulled"
+                );
+            }
+            other => panic!("gear_pull.apply: expected PullEntriesFromGame, got {other:?}"),
+        }
+
+        // cac_pull: dead_entry_link detect + pull_entries_from_game apply
+        // with NO nuke_fallback_field (drop-only behavior).
+        let cac_pull = config.fixes.get("cac_pull").expect("cac_pull rule missing");
+        assert!(cac_pull.enabled);
+        assert_eq!(cac_pull.severity, "medium");
+        match &cac_pull.detect {
+            DetectionRule::DeadEntryLink { targets, .. } => {
+                assert_eq!(targets.len(), 1);
+                assert_eq!(targets[0].entry_type, "ContextualActionData");
+            }
+            other => panic!("cac_pull.detect: expected DeadEntryLink, got {other:?}"),
+        }
+        match &cac_pull.apply {
+            TransformAction::PullEntriesFromGame { nuke_fallback_field, .. } => {
+                assert!(
+                    nuke_fallback_field.is_none(),
+                    "cac_pull must drop dead links only, not nuke a fallback field"
+                );
+            }
+            other => panic!("cac_pull.apply: expected PullEntriesFromGame, got {other:?}"),
+        }
+
+        // resolve_dead_refs: recursive_string_extension_not_in_wad detect
+        // (cheap trigger) + resolve_dead_refs apply covering all extensions.
+        let resolve_dead_refs = config
+            .fixes
+            .get("resolve_dead_refs")
+            .expect("resolve_dead_refs rule missing");
+        assert!(resolve_dead_refs.enabled);
+        assert_eq!(resolve_dead_refs.severity, "high");
+        match &resolve_dead_refs.detect {
+            DetectionRule::RecursiveStringExtensionNotInWad { extension, .. } => {
+                assert_eq!(extension, ".dds");
+            }
+            other => panic!(
+                "resolve_dead_refs.detect: expected RecursiveStringExtensionNotInWad, got {other:?}"
+            ),
+        }
+        match &resolve_dead_refs.apply {
+            TransformAction::ResolveDeadRefs { extensions } => {
+                for ext in ["dds", "tex", "anm", "skn", "skl", "scb", "sco"] {
+                    assert!(
+                        extensions.iter().any(|e| e == ext),
+                        "resolve_dead_refs.apply.extensions missing {ext:?}: {extensions:?}"
+                    );
+                }
+            }
+            other => panic!("resolve_dead_refs.apply: expected ResolveDeadRefs, got {other:?}"),
+        }
+
+        // combo_bin_relocate: descriptor-only wad_fixes entry. The pipeline
+        // step that does the real work is keyed off the fix id directly
+        // (see main.rs), not off this rule's detect/apply — just assert it
+        // parses and is present so the guard test + reporting resolve it.
+        let combo_bin_relocate = config
+            .wad_fixes
+            .get("combo_bin_relocate")
+            .expect("combo_bin_relocate rule missing");
+        assert!(combo_bin_relocate.enabled);
+        matches!(combo_bin_relocate.detect, WadDetectionRule::FilePattern { .. })
+            .then_some(())
+            .unwrap_or_else(|| panic!("combo_bin_relocate.detect: expected FilePattern"));
+        matches!(combo_bin_relocate.apply, WadTransformAction::RenameFile { .. })
+            .then_some(())
+            .unwrap_or_else(|| panic!("combo_bin_relocate.apply: expected RenameFile"));
     }
 }

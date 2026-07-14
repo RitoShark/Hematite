@@ -49,10 +49,11 @@ struct ProcessContext<'a> {
     /// populated when repathing is active).
     game_wad: Option<&'a Path>,
     /// Whether combo-bin relocation (`combo_bin_relocate`) is active for
-    /// this run. Not yet reachable via `--all`/`collect_selected_fixes`
-    /// (its config rule lands in a later task) — set directly from
-    /// `selected_fixes.contains("combo_bin_relocate")` in `main.rs` so it
-    /// activates automatically once that config entry exists.
+    /// this run. Reachable via `--relocate-bins`, `--all`, or the no-flags
+    /// default (all three populate `selected_fixes` via `ALL_FIX_IDS`);
+    /// set directly from `selected_fixes.contains("combo_bin_relocate")`
+    /// in `main.rs`. The config entry in `fix_config.json` (`wad_fixes`)
+    /// is a descriptor only — this field is what actually gates the step.
     relocate_combo_bins: bool,
 }
 
