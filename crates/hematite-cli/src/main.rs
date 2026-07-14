@@ -19,6 +19,7 @@
 mod anm_restore;
 mod args;
 mod banner;
+mod combo_relocate;
 mod deep_repair;
 mod hash_downloader;
 mod interactive;
@@ -308,6 +309,12 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         }
     };
 
+    // Not yet reachable via `--all`/`collect_selected_fixes` (its config
+    // rule lands in a later task) — honor it directly so it activates
+    // automatically once that config entry exists and starts populating
+    // `selected_fixes`.
+    let relocate_combo_bins = selected_fixes.iter().any(|f| f == "combo_bin_relocate");
+
     let result = process::process_input(
         input,
         &config,
@@ -320,6 +327,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         live_provider.as_ref(),
         restore_anm,
         cli.game_wad.as_deref(),
+        relocate_combo_bins,
     )?;
 
     let duration = start_time.elapsed().as_secs_f64();

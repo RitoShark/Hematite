@@ -48,6 +48,12 @@ struct ProcessContext<'a> {
     /// wasn't passed (unlike `RepathOptions::game_wad`, which is only
     /// populated when repathing is active).
     game_wad: Option<&'a Path>,
+    /// Whether combo-bin relocation (`combo_bin_relocate`) is active for
+    /// this run. Not yet reachable via `--all`/`collect_selected_fixes`
+    /// (its config rule lands in a later task) — set directly from
+    /// `selected_fixes.contains("combo_bin_relocate")` in `main.rs` so it
+    /// activates automatically once that config entry exists.
+    relocate_combo_bins: bool,
 }
 
 /// Load hash provider with LMDB fallback to TXT.
@@ -132,6 +138,7 @@ pub fn process_input(
     live: Option<&LiveGameProvider>,
     restore_anm: bool,
     game_wad: Option<&Path>,
+    relocate_combo_bins: bool,
 ) -> Result<ProcessResult> {
     // Load hash provider once for all files. The bar shows a stage
     // label so the user sees something happen during the (slow) LMDB
@@ -153,6 +160,7 @@ pub fn process_input(
         live,
         restore_anm,
         game_wad,
+        relocate_combo_bins,
     };
 
     if ctx.restore_anm {
@@ -384,6 +392,25 @@ fn process_wad_file(
         .extract_all_files(hash_provider.as_ref())
         .context("Failed to extract files from WAD")?;
 
+    // === COMBO-BIN RELOCATION ===
+    // Must run before the BIN fix loop (and before repath/restore-anm) so
+    // any downstream path-based logic sees the relocated location. Order
+    // vs. seed discovery doesn't matter: combo bins are never seeds.
+    let mut combo_bins_relocated = 0u32;
+    if ctx.relocate_combo_bins || selected_fixes.iter().any(|f| f == "combo_bin_relocate") {
+        if dry_run {
+            tracing::info!("[dry-run] Would relocate legacy combo-bin WAD entries");
+        } else {
+            combo_bins_relocated = run_combo_bin_relocate(&mut all_files, ctx.game_wad, live);
+            if combo_bins_relocated > 0 {
+                ctx.ui.fix_applied(
+                    "Relocated combo-bin(s) to Riot's multi_skins path",
+                    Some(combo_bins_relocated),
+                );
+            }
+        }
+    }
+
     // Identify BIN entries by content magic, not just by path extension —
     // mods commonly ship BINs whose path-hash isn't in the dictionary, in
     // which case the resolved "path" is a hex string and the `.bin` filter
@@ -447,6 +474,7 @@ fn process_wad_file(
     }
 
     let mut total_result = ProcessResult::default();
+    total_result.fixes_applied += combo_bins_relocated;
     let mut shared_files_to_remove = Vec::new();
 
     // === WAD-LEVEL PIPELINE ===
@@ -1173,7 +1201,6 @@ fn process_wad_folder(
 
     // Extract all files from the WAD folder
     let mut all_files = Vec::new();
-    let mut path_hashes = std::collections::HashSet::new();
 
     for entry in WalkDir::new(folder) {
         let entry = entry.context("Failed to read directory entry in WAD folder")?;
@@ -1186,10 +1213,31 @@ fn process_wad_folder(
             let hash = wad_path_hash(&rel_path_str);
             let bytes = std::fs::read(path).context("Failed to read file in WAD folder")?;
             all_files.push((hash, rel_path_str, bytes));
-            path_hashes.insert(hash);
         }
     }
 
+    // === COMBO-BIN RELOCATION ===
+    // Must run before the BIN fix loop (and before the WAD-provider hash
+    // set is built, so downstream `has_path`/`has_hash` checks see the
+    // relocated location) and before repath/restore-anm. Order vs. seed
+    // discovery doesn't matter: combo bins are never seeds.
+    let mut combo_bins_relocated = 0u32;
+    if ctx.relocate_combo_bins || selected_fixes.iter().any(|f| f == "combo_bin_relocate") {
+        if dry_run {
+            tracing::info!("[dry-run] Would relocate legacy combo-bin WAD entries");
+        } else {
+            combo_bins_relocated = run_combo_bin_relocate(&mut all_files, ctx.game_wad, live);
+            if combo_bins_relocated > 0 {
+                ctx.ui.fix_applied(
+                    "Relocated combo-bin(s) to Riot's multi_skins path",
+                    Some(combo_bins_relocated),
+                );
+            }
+        }
+    }
+
+    let path_hashes: std::collections::HashSet<u64> =
+        all_files.iter().map(|(h, _, _)| *h).collect();
     let wad_provider = FileWadProvider::from_hashes(path_hashes);
 
     // Identify BIN entries by content magic, not just by path extension
@@ -1244,6 +1292,7 @@ fn process_wad_folder(
     }
 
     let mut total_result = ProcessResult::default();
+    total_result.fixes_applied += combo_bins_relocated;
     let mut shared_files_to_remove = Vec::new();
 
     // === WAD-LEVEL PIPELINE ===
@@ -2080,6 +2129,49 @@ fn run_restore_anm(
             );
             stats.restored
         }
+        None => 0,
+    }
+}
+
+/// `combo_bin_relocate` pipeline step: re-key legacy
+/// `data/<champ>_skins_<slots>.bin` WAD entries to Riot's relocated
+/// `data/characters/<champ>/<champ>_multi_skins_<slots>.bin` path, when the
+/// game confirms the new path exists and the mod ships no per-skin BINs.
+///
+/// Source priority mirrors `--restore-anm`/deep repair: an explicit
+/// `--game-wad` file wins over the auto-detected live index. Fails open —
+/// with neither source available this is an info log and a no-op.
+fn run_combo_bin_relocate(
+    all_files: &mut [(u64, String, Vec<u8>)],
+    game_wad: Option<&Path>,
+    live: Option<&LiveGameProvider>,
+) -> u32 {
+    use crate::deep_repair::{GamePullSource, LiveSource, WadFileSource};
+
+    let game_hashes: Option<std::collections::HashSet<u64>> = if let Some(game_wad_path) = game_wad
+    {
+        match WadFileSource::open(game_wad_path) {
+            Ok(source) => Some(source.hashes().clone()),
+            Err(e) => {
+                tracing::warn!(
+                    "combo-bin relocation: failed to open --game-wad {}: {}",
+                    game_wad_path.display(),
+                    e
+                );
+                None
+            }
+        }
+    } else if let Some(live) = live {
+        Some(LiveSource::new(live).hashes().clone())
+    } else {
+        tracing::debug!(
+            "combo-bin relocation: no live game install detected and no --game-wad given — skipping"
+        );
+        None
+    };
+
+    match game_hashes {
+        Some(hashes) => crate::combo_relocate::relocate_combo_bins(all_files, &hashes),
         None => 0,
     }
 }
