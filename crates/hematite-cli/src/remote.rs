@@ -98,6 +98,49 @@ fn fetch_json(url: &str) -> Result<String> {
 /// 4. If fetch fails, use stale cache (if available)
 /// 5. If no cache, use embedded config
 pub fn load_fix_config() -> FixConfig {
+    let config = load_fix_config_source();
+
+    // Never run with a config OLDER than the one this binary shipped with.
+    // The binary's fix IDs (args::ALL_FIX_IDS) are guaranteed to exist in the
+    // embedded config; a stale remote/cache (e.g. CDN lag right after a
+    // release, or a still-valid cache from before an update) would make the
+    // fix pipeline error with "Fix rule not found". Prefer embedded when newer.
+    let embedded = load_embedded_fix_config();
+    if version_newer(&embedded.version, &config.version) {
+        tracing::info!(
+            "Remote/cached fix config {} is older than embedded {} — using embedded",
+            config.version,
+            embedded.version
+        );
+        return embedded;
+    }
+    config
+}
+
+/// Compare dotted numeric versions: true when `a` is strictly newer than `b`.
+/// Non-numeric segments compare as 0; missing segments compare as 0.
+fn version_newer(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.split('.')
+            .map(|s| s.trim().parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (a, b) = (parse(a), parse(b));
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// The cache/fetch/stale-cache/embedded lookup chain (pre-version-gate).
+fn load_fix_config_source() -> FixConfig {
     let cache_dir = match get_cache_dir() {
         Ok(dir) => dir,
         Err(e) => {
@@ -284,4 +327,43 @@ pub fn get_cache_status() -> Result<CacheStatus> {
         champion_list_cached: champion_list_cache.exists(),
         champion_list_valid: is_cache_valid(&champion_list_cache),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_newer_basic_ordering() {
+        assert!(version_newer("2.2.0", "2.1.0"));
+        assert!(!version_newer("2.1.0", "2.2.0"));
+        assert!(!version_newer("2.2.0", "2.2.0"));
+        assert!(version_newer("10.0.0", "9.9.9"));
+    }
+
+    #[test]
+    fn version_newer_uneven_segments() {
+        assert!(version_newer("2.2.0.1", "2.2.0"));
+        assert!(!version_newer("2.2", "2.2.0"));
+        assert!(version_newer("3", "2.9.9"));
+    }
+
+    #[test]
+    fn version_newer_garbage_segments_compare_as_zero() {
+        assert!(version_newer("2.2.0", "2.x.9"));
+        assert!(!version_newer("abc", "0.0.1"));
+    }
+
+    #[test]
+    fn embedded_config_version_is_current() {
+        // The embedded config must carry the new-rule config version so the
+        // "prefer embedded when newer" gate protects fresh binaries from
+        // stale remote configs.
+        let embedded = load_embedded_fix_config();
+        assert!(
+            version_newer(&embedded.version, "2.1.0"),
+            "embedded config version {} must be newer than 2.1.0",
+            embedded.version
+        );
+    }
 }
