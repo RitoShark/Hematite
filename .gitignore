@@ -19,3 +19,6 @@ Thumbs.db
 
 # Logs
 logs/
+
+# Claude working guide (kept local, not tracked)
+CLAUDE.md
