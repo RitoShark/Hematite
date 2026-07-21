@@ -2,8 +2,8 @@
 //!
 //! Routes input files to the appropriate processing pipeline based on file type.
 
-use crate::live_provider::LiveGameProvider;
 use anyhow::{Context, Result};
+use hematite_orchestrate::LiveGameProvider;
 use hematite_core::context::FixContext;
 use hematite_core::pipeline::apply_fixes;
 use hematite_core::repath as repath_core;
@@ -2036,7 +2036,7 @@ fn process_fantome_file(
 /// Make the mod self-contained by pulling missing dependencies out of the
 /// base-game `.wad.client` at `game_wad_path`.
 ///
-/// Thin wrapper over [`crate::deep_repair::resolve_from_game_wad`], which
+/// Thin wrapper over [`hematite_orchestrate::deep_repair::resolve_from_game_wad`], which
 /// performs seed-BIN backfill (asset-only mods get a foundation skin BIN) and
 /// a transitive dependency closure (recursively pull every referenced/linked
 /// file until nothing new appears). Extracted files are appended to
@@ -2050,7 +2050,7 @@ fn extract_missing_from_game_wad(
     hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<u32> {
-    let stats = crate::deep_repair::resolve_from_game_wad(
+    let stats = hematite_orchestrate::deep_repair::resolve_from_game_wad(
         game_wad_path,
         all_files,
         bin_provider,
@@ -2073,7 +2073,7 @@ fn extract_missing_from_live(
     bin_provider: &FileBinProvider,
     opts: &RepathOptions,
 ) -> Result<u32> {
-    let stats = crate::deep_repair::resolve_from_live(live, all_files, bin_provider, opts)?;
+    let stats = hematite_orchestrate::deep_repair::resolve_from_live(live, all_files, bin_provider, opts)?;
     Ok(stats.files_pulled)
 }
 
@@ -2095,8 +2095,8 @@ fn run_restore_anm(
     game_wad: Option<&Path>,
     live: Option<&LiveGameProvider>,
 ) -> u32 {
-    use crate::anm_restore::restore_missing_anms;
-    use crate::deep_repair::{LiveSource, WadFileSource};
+    use hematite_orchestrate::anm_restore::restore_missing_anms;
+    use hematite_orchestrate::deep_repair::{LiveSource, WadFileSource};
 
     let stats = if let Some(game_wad_path) = game_wad {
         match WadFileSource::open(game_wad_path) {
@@ -2147,7 +2147,7 @@ fn run_combo_bin_relocate(
     game_wad: Option<&Path>,
     live: Option<&LiveGameProvider>,
 ) -> u32 {
-    use crate::deep_repair::{GamePullSource, LiveSource, WadFileSource};
+    use hematite_orchestrate::deep_repair::{GamePullSource, LiveSource, WadFileSource};
 
     let game_hashes: Option<std::collections::HashSet<u64>> = if let Some(game_wad_path) = game_wad
     {
@@ -2172,7 +2172,7 @@ fn run_combo_bin_relocate(
     };
 
     match game_hashes {
-        Some(hashes) => crate::combo_relocate::relocate_combo_bins(all_files, &hashes),
+        Some(hashes) => hematite_orchestrate::combo_relocate::relocate_combo_bins(all_files, &hashes),
         None => 0,
     }
 }

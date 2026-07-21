@@ -753,6 +753,7 @@ dependencies = [
  "hematite-core",
  "hematite-file",
  "hematite-live",
+ "hematite-orchestrate",
  "hematite-types",
  "indicatif",
  "reqwest",
