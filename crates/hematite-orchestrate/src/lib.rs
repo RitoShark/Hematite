@@ -19,4 +19,4 @@ pub mod progress;
 // pub use list_fixes::{list_fixes, FixInfo};
 // pub use live_provider::LiveGameProvider;
 // pub use options::FixOptions;
-// pub use progress::{NoopSink, ProgressSink};
+pub use progress::{NoopSink, ProgressSink};
