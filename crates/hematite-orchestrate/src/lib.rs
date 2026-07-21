@@ -13,8 +13,7 @@ pub mod live_provider;
 pub mod options;
 pub mod progress;
 
-// Re-exports are wired up as each module is filled in (Tasks 2–6).
-// pub use fix_folder::fix_folder;
+pub use fix_folder::fix_folder;
 pub use game_access::GameFileAccess;
 pub use list_fixes::{list_fixes, FixInfo};
 pub use live_provider::LiveGameProvider;
