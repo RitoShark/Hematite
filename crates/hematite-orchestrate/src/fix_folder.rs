@@ -79,6 +79,12 @@ pub fn fix_folder(
         }
     }
 
+    // Original on-disk relative paths, snapshotted before any rename/convert —
+    // used by the in-place writer to delete files that were renamed away or
+    // removed (so `.dds` originals don't linger next to their new `.tex`).
+    let original_paths: std::collections::HashSet<String> =
+        all_files.iter().map(|(_, p, _)| p.clone()).collect();
+
     // === COMBO-BIN RELOCATION ===
     // Must run before the BIN fix loop (and before the WAD-provider hash
     // set is built, so downstream `has_path`/`has_hash` checks see the
@@ -189,8 +195,12 @@ pub fn fix_folder(
         hematite_file::fix_dimensions::fix_dimensions_auto,
     );
 
+    // The actual byte conversions only run on a real fix. On a detect-only
+    // scan the detection counts already came from `wad_output.applied_fixes`
+    // above; doing (and logging) the conversions here would be wasted work and
+    // misleading "✓ Converted/renamed" output for a pass that writes nothing.
     let mut conversion_count = 0u32;
-    if !wad_output.files_to_convert.is_empty() {
+    if !dry_run && !wad_output.files_to_convert.is_empty() {
         tracing::info!(
             "Converting {} file formats...",
             wad_output.files_to_convert.len()
@@ -248,9 +258,9 @@ pub fn fix_folder(
         total_result.fixes_applied += conversion_count;
     }
 
-    // Perform in-place byte transforms
+    // Perform in-place byte transforms (real fix only — see above).
     let mut transform_count = 0u32;
-    if !wad_output.files_to_transform.is_empty() {
+    if !dry_run && !wad_output.files_to_transform.is_empty() {
         tracing::info!(
             "Applying {} in-place byte transforms...",
             wad_output.files_to_transform.len()
@@ -629,11 +639,30 @@ pub fn fix_folder(
 
     // === WAD FOLDER WRITING ===
     if !dry_run && (total_result.fixes_applied > 0 || !shared_files_to_remove.is_empty()) {
-        ui.stage("Updating WAD folder…");
-        tracing::info!("Writing modified WAD folder...");
+        // The set of relative paths the run wants on disk (post-rename), minus
+        // anything explicitly removed.
+        let final_paths: std::collections::HashSet<&String> = all_files
+            .iter()
+            .map(|(_, p, _)| p)
+            .filter(|p| !shared_files_to_remove.contains(*p))
+            .collect();
 
-        let output_path = folder.with_extension("fixed.wad.client");
+        let output_path = if opts.in_place {
+            folder.to_path_buf()
+        } else {
+            folder.with_extension("fixed.wad.client")
+        };
         std::fs::create_dir_all(&output_path).context("Failed to create output WAD folder")?;
+
+        ui.stage("Updating WAD folder…");
+        tracing::info!(
+            "Writing modified WAD folder ({})...",
+            if opts.in_place {
+                "in place"
+            } else {
+                "fixed copy"
+            }
+        );
 
         let mut files_written = 0;
         for (_, path, bytes) in &all_files {
@@ -649,15 +678,31 @@ pub fn fix_folder(
             }
         }
 
+        // In place: delete original files that were renamed away or removed, so
+        // stale `.dds` (etc.) don't linger beside their new `.tex`. Only touch
+        // paths we originally READ from this folder — never anything else.
+        let mut files_deleted = 0;
+        if opts.in_place {
+            for orig in &original_paths {
+                if !final_paths.contains(orig) {
+                    let stale = output_path.join(orig);
+                    if stale.is_file() && std::fs::remove_file(&stale).is_ok() {
+                        files_deleted += 1;
+                    }
+                }
+            }
+        }
+
         let is_intermediate = output_path.starts_with(std::env::temp_dir());
         if !is_intermediate {
             ui.fix_applied(&format!("Wrote WAD folder {}", output_path.display()), None);
         }
-        tracing::info!("✓ Wrote fixed WAD folder to: {}", output_path.display());
+        tracing::info!("✓ Wrote WAD folder to: {}", output_path.display());
         tracing::info!(
-            "  {} files written, {} files removed",
+            "  {} files written, {} removed, {} stale deleted",
             files_written,
-            shared_files_to_remove.len()
+            shared_files_to_remove.len(),
+            files_deleted
         );
     } else if !dry_run {
         ui.note("No changes detected — WAD folder not modified.");

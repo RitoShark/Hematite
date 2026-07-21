@@ -37,4 +37,10 @@ pub struct FixOptions<'a> {
     /// install was found or live access was disabled — every live-game
     /// feature fails open in that case.
     pub live: Option<&'a crate::live_provider::LiveGameProvider>,
+    /// Write the fixed files back INTO the source folder instead of a sibling
+    /// `<folder>.fixed.wad.client` copy. Overwrites changed files and deletes
+    /// originals that were renamed away or removed. Used by embedders (Flint)
+    /// that fix a project in place; the CLI leaves this `false` so it keeps
+    /// producing the non-destructive `.fixed` copy.
+    pub in_place: bool,
 }
