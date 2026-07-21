@@ -1203,6 +1203,8 @@ fn process_wad_folder(
         relocate_combo_bins: ctx.relocate_combo_bins,
         game_wad: ctx.game_wad,
         live: ctx.live,
+        // The CLI keeps producing the non-destructive `.fixed` copy.
+        in_place: false,
     };
     let sink = crate::ui::UiSink(&ctx.ui);
     hematite_orchestrate::fix_folder(

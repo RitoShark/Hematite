@@ -144,6 +144,7 @@ fn detect_only_reports_fixes_and_writes_nothing() {
         relocate_combo_bins: false,
         game_wad: None,
         live: None,
+        in_place: false,
     };
 
     let result = fix_folder(
@@ -188,4 +189,62 @@ fn detect_only_reports_fixes_and_writes_nothing() {
         !tmp.path().join("Test.fixed.wad.client").exists(),
         "detect_only must not write a fixed output folder"
     );
+}
+
+/// A real `in_place` run writes back INTO the source folder and produces NO
+/// `.fixed.wad.client` sibling (the copy the CLI makes). Uses
+/// `champion_bin_remover`, which removes the skin BIN.
+#[test]
+fn in_place_run_writes_to_source_no_fixed_copy() {
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../config/fix_config.json"
+    ))
+    .unwrap();
+    let config: FixConfig = serde_json::from_str(&raw).unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let wad_folder = tmp.path().join("Test.wad.client");
+    let bin_rel = "data/characters/test/skins/skin0.bin";
+    let bin_path = wad_folder.join(bin_rel);
+    std::fs::create_dir_all(bin_path.parent().unwrap()).unwrap();
+    std::fs::write(&bin_path, spell_object_bin()).unwrap();
+    // A second, untouched file that must survive in place.
+    let keep_path = wad_folder.join("data/keep.txt");
+    std::fs::write(&keep_path, b"keep me").unwrap();
+
+    let champions = CharacterRelations::default();
+    let hash_provider: Arc<dyn HashProvider> = Arc::new(StubHashes);
+    let selected = vec!["champion_bin_remover".to_string()];
+    let opts = FixOptions {
+        dry_run: false,
+        detect_only: false,
+        repath: None,
+        restore_anm: false,
+        relocate_combo_bins: false,
+        game_wad: None,
+        live: None,
+        in_place: true,
+    };
+
+    let result = fix_folder(
+        &wad_folder,
+        &config,
+        &selected,
+        &champions,
+        &hash_provider,
+        &opts,
+        &NoopSink,
+    )
+    .expect("fix_folder in-place run");
+
+    assert!(result.fixes_applied > 0, "the run should apply the fix");
+    // No sibling copy — we wrote in place.
+    assert!(
+        !tmp.path().join("Test.fixed.wad.client").exists(),
+        "in_place must NOT produce a .fixed.wad.client sibling"
+    );
+    // The source folder still exists and the untouched file survived.
+    assert!(wad_folder.is_dir(), "source folder must remain");
+    assert_eq!(std::fs::read(&keep_path).unwrap(), b"keep me");
 }
