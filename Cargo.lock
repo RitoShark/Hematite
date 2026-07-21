@@ -828,6 +828,7 @@ dependencies = [
  "hematite-file",
  "hematite-live",
  "hematite-types",
+ "indexmap",
  "serde_json",
  "tempfile",
  "tracing",

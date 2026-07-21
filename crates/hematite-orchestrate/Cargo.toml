@@ -18,3 +18,4 @@ walkdir = "2"
 serde_json = { workspace = true }
 tempfile = "3.10"
 zstd = "0.13"
+indexmap = { workspace = true }
