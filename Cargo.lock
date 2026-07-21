@@ -819,6 +819,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hematite-orchestrate"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "hematite-core",
+ "hematite-file",
+ "hematite-live",
+ "hematite-types",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "walkdir",
+ "zstd 0.13.3",
+]
+
+[[package]]
 name = "hematite-types"
 version = "0.5.0"
 dependencies = [
