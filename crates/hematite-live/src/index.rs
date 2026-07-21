@@ -54,8 +54,16 @@ impl GameIndex {
         for (i, c) in toc.chunks.iter().enumerate() {
             self.by_hash.entry(c.path_hash).or_insert((wad_idx, i));
         }
-        tracing::debug!("GameIndex: loaded {} chunks from {}", toc.chunks.len(), path.display());
-        self.wads.push(LoadedWad { path: canonical, chunks: toc.chunks, file: None });
+        tracing::debug!(
+            "GameIndex: loaded {} chunks from {}",
+            toc.chunks.len(),
+            path.display()
+        );
+        self.wads.push(LoadedWad {
+            path: canonical,
+            chunks: toc.chunks,
+            file: None,
+        });
         Ok(())
     }
 
@@ -157,7 +165,10 @@ mod tests {
         let champs = dir.path().join("Game/DATA/FINAL/Champions");
         std::fs::create_dir_all(&champs).unwrap();
         let wad = champs.join("Yone.wad.client");
-        write_fixture_wad(&wad, &[("data/characters/yone/skins/skin0.bin", b"PROPdata")]);
+        write_fixture_wad(
+            &wad,
+            &[("data/characters/yone/skins/skin0.bin", b"PROPdata")],
+        );
 
         std::fs::write(dir.path().join("Game").join("League of Legends.exe"), b"").unwrap();
         let install = crate::detect::LeagueInstall::from_path(dir.path()).unwrap();
@@ -166,7 +177,8 @@ mod tests {
         assert!(idx.has_path("data/characters/yone/skins/skin0.bin"));
         assert!(!idx.has_path("data/characters/yone/skins/skin1.bin"));
         assert_eq!(
-            idx.pull_path("data/characters/yone/skins/skin0.bin").unwrap(),
+            idx.pull_path("data/characters/yone/skins/skin0.bin")
+                .unwrap(),
             b"PROPdata"
         );
         // add_champion for a champion with no WAD is a no-op returning false

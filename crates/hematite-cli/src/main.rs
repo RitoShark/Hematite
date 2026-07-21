@@ -354,10 +354,22 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
 }
 
 fn register_deep_repair_assets() {
-    hematite_core::assets::register("colorwhiteplaceholder_dds", include_bytes!("assets/colorwhiteplaceholder.dds"));
-    hematite_core::assets::register("colorwhiteplaceholder_tex", include_bytes!("assets/colorwhiteplaceholder.tex"));
-    hematite_core::assets::register("outlinetonemap_dds", include_bytes!("assets/outlinetonemap.dds"));
-    hematite_core::assets::register("outlinetonemap_tex", include_bytes!("assets/outlinetonemap.tex"));
+    hematite_core::assets::register(
+        "colorwhiteplaceholder_dds",
+        include_bytes!("assets/colorwhiteplaceholder.dds"),
+    );
+    hematite_core::assets::register(
+        "colorwhiteplaceholder_tex",
+        include_bytes!("assets/colorwhiteplaceholder.tex"),
+    );
+    hematite_core::assets::register(
+        "outlinetonemap_dds",
+        include_bytes!("assets/outlinetonemap.dds"),
+    );
+    hematite_core::assets::register(
+        "outlinetonemap_tex",
+        include_bytes!("assets/outlinetonemap.tex"),
+    );
     hematite_core::assets::register("toonshading_dds", include_bytes!("assets/toonshading.dds"));
     hematite_core::assets::register("toonshading_tex", include_bytes!("assets/toonshading.tex"));
 }

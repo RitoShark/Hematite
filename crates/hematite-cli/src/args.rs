@@ -198,18 +198,27 @@ pub struct Cli {
     pub check_version: bool,
 
     // -- Live-game features ----------------------------------------------
-    #[arg(long, value_name = "DIR",
-          help = "Path to the League of Legends install (root or Game dir). \
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Path to the League of Legends install (root or Game dir). \
                   If omitted, hematite auto-detects the install. Live-game \
                   features (deep repair, gear/CAC pull, ref ladder, --restore-anm) \
-                  use this.")]
+                  use this."
+    )]
     pub game_path: Option<std::path::PathBuf>,
 
-    #[arg(long, help = "Disable all live-game features (no install detection, no game pulls)")]
+    #[arg(
+        long,
+        help = "Disable all live-game features (no install detection, no game pulls)"
+    )]
     pub no_live: bool,
 
-    #[arg(long, help = "Restore missing .anm animation files by pulling them from the game \
-                        (disables anm_remover for this run)")]
+    #[arg(
+        long,
+        help = "Restore missing .anm animation files by pulling them from the game \
+                        (disables anm_remover for this run)"
+    )]
     pub restore_anm: bool,
 }
 
@@ -354,8 +363,8 @@ mod tests {
     /// ALL_FIX_IDS drift ahead of the config again.
     #[test]
     fn all_fix_ids_exist_in_repo_config() {
-        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../config/fix_config.json");
+        let config_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/fix_config.json");
         let raw = std::fs::read_to_string(&config_path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", config_path.display()));
         let config: hematite_types::config::FixConfig = serde_json::from_str(&raw)
@@ -363,9 +372,7 @@ mod tests {
 
         let missing: Vec<&&str> = ALL_FIX_IDS
             .iter()
-            .filter(|id| {
-                !config.fixes.contains_key(**id) && !config.wad_fixes.contains_key(**id)
-            })
+            .filter(|id| !config.fixes.contains_key(**id) && !config.wad_fixes.contains_key(**id))
             .collect();
 
         assert!(
@@ -385,10 +392,12 @@ mod tests {
     /// wouldn't — that test only checks key presence, not shape.
     #[test]
     fn new_v2_2_0_rules_parse_into_expected_variants() {
-        use hematite_types::config::{DetectionRule, TransformAction, WadDetectionRule, WadTransformAction};
+        use hematite_types::config::{
+            DetectionRule, TransformAction, WadDetectionRule, WadTransformAction,
+        };
 
-        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../config/fix_config.json");
+        let config_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/fix_config.json");
         let raw = std::fs::read_to_string(&config_path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", config_path.display()));
         let config: hematite_types::config::FixConfig = serde_json::from_str(&raw)
@@ -398,11 +407,17 @@ mod tests {
 
         // gear_pull: dead_entry_link detect + pull_entries_from_game apply
         // with nuke_fallback_field set (last-resort fallback).
-        let gear_pull = config.fixes.get("gear_pull").expect("gear_pull rule missing");
+        let gear_pull = config
+            .fixes
+            .get("gear_pull")
+            .expect("gear_pull rule missing");
         assert!(gear_pull.enabled);
         assert_eq!(gear_pull.severity, "critical");
         match &gear_pull.detect {
-            DetectionRule::DeadEntryLink { main_entry_type, targets } => {
+            DetectionRule::DeadEntryLink {
+                main_entry_type,
+                targets,
+            } => {
                 assert_eq!(main_entry_type, "SkinCharacterDataProperties");
                 assert_eq!(targets.len(), 1);
                 assert_eq!(targets[0].entry_type, "GearSkinUpgrade");
@@ -411,7 +426,11 @@ mod tests {
             other => panic!("gear_pull.detect: expected DeadEntryLink, got {other:?}"),
         }
         match &gear_pull.apply {
-            TransformAction::PullEntriesFromGame { targets, nuke_fallback_field, .. } => {
+            TransformAction::PullEntriesFromGame {
+                targets,
+                nuke_fallback_field,
+                ..
+            } => {
                 assert_eq!(targets.len(), 1);
                 assert_eq!(
                     nuke_fallback_field.as_deref(),
@@ -435,7 +454,10 @@ mod tests {
             other => panic!("cac_pull.detect: expected DeadEntryLink, got {other:?}"),
         }
         match &cac_pull.apply {
-            TransformAction::PullEntriesFromGame { nuke_fallback_field, .. } => {
+            TransformAction::PullEntriesFromGame {
+                nuke_fallback_field,
+                ..
+            } => {
                 assert!(
                     nuke_fallback_field.is_none(),
                     "cac_pull must drop dead links only, not nuke a fallback field"
@@ -481,11 +503,17 @@ mod tests {
             .get("combo_bin_relocate")
             .expect("combo_bin_relocate rule missing");
         assert!(combo_bin_relocate.enabled);
-        matches!(combo_bin_relocate.detect, WadDetectionRule::FilePattern { .. })
-            .then_some(())
-            .unwrap_or_else(|| panic!("combo_bin_relocate.detect: expected FilePattern"));
-        matches!(combo_bin_relocate.apply, WadTransformAction::RenameFile { .. })
-            .then_some(())
-            .unwrap_or_else(|| panic!("combo_bin_relocate.apply: expected RenameFile"));
+        matches!(
+            combo_bin_relocate.detect,
+            WadDetectionRule::FilePattern { .. }
+        )
+        .then_some(())
+        .unwrap_or_else(|| panic!("combo_bin_relocate.detect: expected FilePattern"));
+        matches!(
+            combo_bin_relocate.apply,
+            WadTransformAction::RenameFile { .. }
+        )
+        .then_some(())
+        .unwrap_or_else(|| panic!("combo_bin_relocate.apply: expected RenameFile"));
     }
 }

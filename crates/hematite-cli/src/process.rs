@@ -3,7 +3,6 @@
 //! Routes input files to the appropriate processing pipeline based on file type.
 
 use anyhow::{Context, Result};
-use hematite_orchestrate::LiveGameProvider;
 use hematite_core::context::FixContext;
 use hematite_core::pipeline::apply_fixes;
 use hematite_core::repath as repath_core;
@@ -14,6 +13,7 @@ use hematite_file::{
     lmdb_hash_adapter::LmdbHashProvider, mesh_converter, texture_converter,
     wad_adapter::wad_path_hash,
 };
+use hematite_orchestrate::LiveGameProvider;
 use hematite_types::champion::CharacterRelations;
 use hematite_types::config::FixConfig;
 use hematite_types::repath::RepathOptions;
@@ -544,7 +544,10 @@ fn process_wad_file(
 
                         if conversion.from_ext != conversion.to_ext {
                             let old_path = path.clone();
-                            let new_path = path.replace(&format!(".{}", conversion.from_ext), &format!(".{}", conversion.to_ext));
+                            let new_path = path.replace(
+                                &format!(".{}", conversion.from_ext),
+                                &format!(".{}", conversion.to_ext),
+                            );
                             *path = new_path.clone();
                             *hash = wad_path_hash(&new_path);
                             tracing::info!(
@@ -1049,8 +1052,11 @@ fn process_wad_file(
             if opts.invis_texture && !new_path_set.is_empty() {
                 let existing: std::collections::HashSet<String> =
                     all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
-                let placeholders =
-                    repath_core::missing_placeholders(&existing, &new_path_set, &opts.placeholder_rules);
+                let placeholders = repath_core::missing_placeholders(
+                    &existing,
+                    &new_path_set,
+                    &opts.placeholder_rules,
+                );
                 if !placeholders.is_empty() {
                     tracing::info!("  Injecting {} invis placeholder(s)...", placeholders.len());
                     for (path, bytes) in placeholders {
@@ -1165,7 +1171,9 @@ fn get_wad_folder_key(path: &str) -> Option<String> {
     if let Some(idx) = lower.find(".wad.client/") {
         Some(path[..idx + 11].to_string())
     } else {
-        lower.find(".wad.client\\").map(|idx| path[..idx + 11].to_string())
+        lower
+            .find(".wad.client\\")
+            .map(|idx| path[..idx + 11].to_string())
     }
 }
 

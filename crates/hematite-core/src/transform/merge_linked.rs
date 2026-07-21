@@ -44,7 +44,9 @@ pub fn apply(ctx: &mut FixContext<'_>) -> u32 {
     }
 
     // Delete successfully merged dependency files from parent's linked list
-    ctx.tree.linked.retain(|path| !successfully_merged.contains(path));
+    ctx.tree
+        .linked
+        .retain(|path| !successfully_merged.contains(path));
 
     // Register successfully merged paths for removal from WAD
     for path in successfully_merged {
@@ -67,20 +69,40 @@ mod tests {
 
     struct MockHashes;
     impl crate::traits::HashProvider for MockHashes {
-        fn resolve_type(&self, _: TypeHash) -> Option<&str> { None }
-        fn resolve_field(&self, _: hematite_types::hash::FieldHash) -> Option<&str> { None }
-        fn resolve_entry(&self, _: PathHash) -> Option<&str> { None }
-        fn resolve_game_path(&self, _: hematite_types::hash::GameHash) -> Option<&str> { None }
-        fn type_hash(&self, _: &str) -> Option<TypeHash> { None }
-        fn field_hash(&self, _: &str) -> Option<hematite_types::hash::FieldHash> { None }
-        fn has_game_path(&self, _: &str) -> bool { false }
-        fn is_loaded(&self) -> bool { true }
+        fn resolve_type(&self, _: TypeHash) -> Option<&str> {
+            None
+        }
+        fn resolve_field(&self, _: hematite_types::hash::FieldHash) -> Option<&str> {
+            None
+        }
+        fn resolve_entry(&self, _: PathHash) -> Option<&str> {
+            None
+        }
+        fn resolve_game_path(&self, _: hematite_types::hash::GameHash) -> Option<&str> {
+            None
+        }
+        fn type_hash(&self, _: &str) -> Option<TypeHash> {
+            None
+        }
+        fn field_hash(&self, _: &str) -> Option<hematite_types::hash::FieldHash> {
+            None
+        }
+        fn has_game_path(&self, _: &str) -> bool {
+            false
+        }
+        fn is_loaded(&self) -> bool {
+            true
+        }
     }
 
     struct MockWad;
     impl crate::traits::WadProvider for MockWad {
-        fn has_path(&self, _: &str) -> bool { false }
-        fn has_hash(&self, _: u64) -> bool { false }
+        fn has_path(&self, _: &str) -> bool {
+            false
+        }
+        fn has_hash(&self, _: u64) -> bool {
+            false
+        }
     }
 
     fn make_dummy_object(class_hash: u32, path_hash: u32) -> BinObject {

@@ -208,7 +208,10 @@ pub fn fix_folder(
 
                         if conversion.from_ext != conversion.to_ext {
                             let old_path = path.clone();
-                            let new_path = path.replace(&format!(".{}", conversion.from_ext), &format!(".{}", conversion.to_ext));
+                            let new_path = path.replace(
+                                &format!(".{}", conversion.from_ext),
+                                &format!(".{}", conversion.to_ext),
+                            );
                             *path = new_path.clone();
                             *hash = wad_path_hash(&new_path);
                             tracing::info!(
@@ -580,8 +583,11 @@ pub fn fix_folder(
             if opts.invis_texture && !new_path_set.is_empty() {
                 let existing: std::collections::HashSet<String> =
                     all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
-                let placeholders =
-                    repath_core::missing_placeholders(&existing, &new_path_set, &opts.placeholder_rules);
+                let placeholders = repath_core::missing_placeholders(
+                    &existing,
+                    &new_path_set,
+                    &opts.placeholder_rules,
+                );
                 if !placeholders.is_empty() {
                     for (path, bytes) in placeholders {
                         let hash = wad_path_hash(&path);

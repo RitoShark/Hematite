@@ -13,7 +13,10 @@ pub struct LiveGameProvider {
 
 impl LiveGameProvider {
     pub fn new(index: GameIndex, bin: Box<dyn BinProvider>) -> Self {
-        Self { index: Mutex::new(index), bin }
+        Self {
+            index: Mutex::new(index),
+            bin,
+        }
     }
 
     /// Direct access for CLI-side machinery (deep repair, restore-anm,
@@ -81,7 +84,10 @@ mod tests {
         std::fs::write(path, out).unwrap();
     }
 
-    fn fake_install_with_champion_wad(champion: &str, entries: &[(&str, &[u8])]) -> tempfile::TempDir {
+    fn fake_install_with_champion_wad(
+        champion: &str,
+        entries: &[(&str, &[u8])],
+    ) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let champs_dir = dir.path().join("Game/DATA/FINAL/Champions");
         std::fs::create_dir_all(&champs_dir).unwrap();
@@ -128,6 +134,8 @@ mod tests {
             .game_bin("data/characters/yone/skins/skin0.bin")
             .is_none());
         // Missing path also returns None (short-circuits before parse).
-        assert!(provider.game_bin("data/characters/yone/skins/skin9.bin").is_none());
+        assert!(provider
+            .game_bin("data/characters/yone/skins/skin9.bin")
+            .is_none());
     }
 }

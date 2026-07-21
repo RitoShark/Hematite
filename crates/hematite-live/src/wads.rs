@@ -22,7 +22,11 @@ fn is_wad_name(name: &str) -> bool {
 pub fn enumerate_wads(game_dir: &Path) -> Vec<GameWadInfo> {
     let root = game_dir.join(DATA_FINAL);
     let mut out = Vec::new();
-    for entry in WalkDir::new(&root).max_depth(MAX_DEPTH).into_iter().flatten() {
+    for entry in WalkDir::new(&root)
+        .max_depth(MAX_DEPTH)
+        .into_iter()
+        .flatten()
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -36,7 +40,11 @@ pub fn enumerate_wads(game_dir: &Path) -> Vec<GameWadInfo> {
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        out.push(GameWadInfo { path: entry.path().to_path_buf(), name, category });
+        out.push(GameWadInfo {
+            path: entry.path().to_path_buf(),
+            name,
+            category,
+        });
     }
     out
 }
@@ -87,7 +95,10 @@ mod tests {
     fn champion_wad_matches_case_insensitively() {
         let dir = setup_game_dir();
         let found = champion_wad(dir.path(), "aatrox").unwrap();
-        assert_eq!(found, dir.path().join("DATA/FINAL/Champions/Aatrox.wad.client"));
+        assert_eq!(
+            found,
+            dir.path().join("DATA/FINAL/Champions/Aatrox.wad.client")
+        );
     }
 
     #[test]

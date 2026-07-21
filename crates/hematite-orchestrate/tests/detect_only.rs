@@ -84,7 +84,9 @@ fn spell_object_bin() -> Vec<u8> {
     };
 
     let provider = FileBinProvider::new();
-    provider.write_bytes(&tree).expect("serialize synthetic BIN")
+    provider
+        .write_bytes(&tree)
+        .expect("serialize synthetic BIN")
 }
 
 /// Snapshot every file under `root` as path → bytes.

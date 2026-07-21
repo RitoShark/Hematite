@@ -64,11 +64,7 @@ pub fn combo_bin_pattern(path: &str) -> Option<ComboBin> {
     if champion.is_empty() || !champion.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return None;
     }
-    if slots.is_empty()
-        || !slots
-            .bytes()
-            .all(|b| b.is_ascii_digit() || b == b'_')
-    {
+    if slots.is_empty() || !slots.bytes().all(|b| b.is_ascii_digit() || b == b'_') {
         return None;
     }
 

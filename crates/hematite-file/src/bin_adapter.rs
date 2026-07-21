@@ -24,8 +24,8 @@ impl Default for FileBinProvider {
 
 impl BinProvider for FileBinProvider {
     fn parse_bytes(&self, data: &[u8]) -> Result<BinTree> {
-        let rs_bin = RsBin::from_bytes(data)
-            .map_err(|e| anyhow::anyhow!("Failed to parse BIN: {:?}", e))?;
+        let rs_bin =
+            RsBin::from_bytes(data).map_err(|e| anyhow::anyhow!("Failed to parse BIN: {:?}", e))?;
         rs_bin_tree_to_hematite(rs_bin)
     }
 

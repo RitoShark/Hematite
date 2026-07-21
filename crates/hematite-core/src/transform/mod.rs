@@ -114,7 +114,12 @@ pub fn apply_transform(
             main_entry_type,
             targets,
             nuke_fallback_field,
-        } => pull_entries::apply(ctx, main_entry_type, targets, nuke_fallback_field.as_deref()),
+        } => pull_entries::apply(
+            ctx,
+            main_entry_type,
+            targets,
+            nuke_fallback_field.as_deref(),
+        ),
         TransformAction::ResolveDeadRefs { extensions } => resolve_refs::apply(ctx, extensions),
         TransformAction::SplitEntriesByType {
             entry_types,
