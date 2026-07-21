@@ -1,0 +1,4 @@
+# Real WAD-folder fixtures for golden-path parity go here.
+# .wad.client / .fantome payloads are gitignored repo-wide (never commit game assets);
+# only this .gitkeep is tracked. Point the ignored `golden_path_parity` test at a
+# real fixture dropped here to run it: `cargo test -p hematite-orchestrate -- --ignored`.

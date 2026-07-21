@@ -16,14 +16,10 @@
 //! All three converge on [`run_with_cli`], the single source of truth
 //! for what a fix session does.
 
-mod anm_restore;
 mod args;
 mod banner;
-mod combo_relocate;
-mod deep_repair;
 mod hash_downloader;
 mod interactive;
-mod live_provider;
 mod logging;
 mod process;
 mod remote;
@@ -226,7 +222,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
     // -- Live-game source resolution ---------------------------------------
     // Fail open: no install found (or --no-live) → live-game features are
     // simply skipped; everything else still runs.
-    let live_provider: Option<live_provider::LiveGameProvider> = if cli.no_live {
+    let live_provider: Option<hematite_orchestrate::LiveGameProvider> = if cli.no_live {
         None
     } else {
         let install = match &cli.game_path {
@@ -240,7 +236,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
             None => hematite_live::detect_league(),
         };
         install.map(|i| {
-            live_provider::LiveGameProvider::new(
+            hematite_orchestrate::LiveGameProvider::new(
                 hematite_live::GameIndex::new(&i),
                 Box::new(hematite_file::bin_adapter::FileBinProvider::new()),
             )
@@ -358,10 +354,22 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
 }
 
 fn register_deep_repair_assets() {
-    hematite_core::assets::register("colorwhiteplaceholder_dds", include_bytes!("assets/colorwhiteplaceholder.dds"));
-    hematite_core::assets::register("colorwhiteplaceholder_tex", include_bytes!("assets/colorwhiteplaceholder.tex"));
-    hematite_core::assets::register("outlinetonemap_dds", include_bytes!("assets/outlinetonemap.dds"));
-    hematite_core::assets::register("outlinetonemap_tex", include_bytes!("assets/outlinetonemap.tex"));
+    hematite_core::assets::register(
+        "colorwhiteplaceholder_dds",
+        include_bytes!("assets/colorwhiteplaceholder.dds"),
+    );
+    hematite_core::assets::register(
+        "colorwhiteplaceholder_tex",
+        include_bytes!("assets/colorwhiteplaceholder.tex"),
+    );
+    hematite_core::assets::register(
+        "outlinetonemap_dds",
+        include_bytes!("assets/outlinetonemap.dds"),
+    );
+    hematite_core::assets::register(
+        "outlinetonemap_tex",
+        include_bytes!("assets/outlinetonemap.tex"),
+    );
     hematite_core::assets::register("toonshading_dds", include_bytes!("assets/toonshading.dds"));
     hematite_core::assets::register("toonshading_tex", include_bytes!("assets/toonshading.tex"));
 }

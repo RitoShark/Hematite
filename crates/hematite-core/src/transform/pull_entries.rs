@@ -384,9 +384,7 @@ mod tests {
             self.types.get(&name.to_lowercase()).map(|&h| TypeHash(h))
         }
         fn field_hash(&self, name: &str) -> Option<FieldHash> {
-            self.fields
-                .get(&name.to_lowercase())
-                .map(|&h| FieldHash(h))
+            self.fields.get(&name.to_lowercase()).map(|&h| FieldHash(h))
         }
         fn is_loaded(&self) -> bool {
             true
@@ -551,7 +549,12 @@ mod tests {
         let game = MapGameProvider { bins };
         ctx.game = Some(&game);
 
-        let count = apply(&mut ctx, "SkinCharacterDataProperties", &[gear_target()], None);
+        let count = apply(
+            &mut ctx,
+            "SkinCharacterDataProperties",
+            &[gear_target()],
+            None,
+        );
 
         assert!(count >= 1);
         assert!(ctx.tree.objects.contains_key(&0x1111_1111));
@@ -584,7 +587,9 @@ mod tests {
         assert!(count >= 1);
         let main_obj = &ctx.tree.objects[&0];
         assert!(
-            !main_obj.properties.contains_key(&SKIN_UPGRADE_DATA_FIELD_HASH),
+            !main_obj
+                .properties
+                .contains_key(&SKIN_UPGRADE_DATA_FIELD_HASH),
             "skinUpgradeData embed should have been removed"
         );
     }
@@ -603,7 +608,12 @@ mod tests {
         let empty_game = EmptyGameProvider;
         ctx.game = Some(&empty_game);
 
-        let count = apply(&mut ctx, "SkinCharacterDataProperties", &[cac_target()], None);
+        let count = apply(
+            &mut ctx,
+            "SkinCharacterDataProperties",
+            &[cac_target()],
+            None,
+        );
 
         assert!(count >= 1);
         let main_obj = &ctx.tree.objects[&0];
@@ -650,7 +660,12 @@ mod tests {
         let empty_game = EmptyGameProvider;
         ctx.game = Some(&empty_game);
 
-        let count = apply(&mut ctx, "SkinCharacterDataProperties", &[cac_target()], None);
+        let count = apply(
+            &mut ctx,
+            "SkinCharacterDataProperties",
+            &[cac_target()],
+            None,
+        );
 
         assert_eq!(count, 1, "exactly one drop: only the link_field's value");
 
@@ -704,6 +719,8 @@ mod tests {
         assert_eq!(count, 0);
         // Tree untouched: still has the original embed with the dead link.
         let main_obj = &ctx.tree.objects[&0];
-        assert!(main_obj.properties.contains_key(&SKIN_UPGRADE_DATA_FIELD_HASH));
+        assert!(main_obj
+            .properties
+            .contains_key(&SKIN_UPGRADE_DATA_FIELD_HASH));
     }
 }

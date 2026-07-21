@@ -19,9 +19,9 @@
 //!    repeating until a full pass adds nothing new (closure reached). A
 //!    `seen` set of every attempted path guards against infinite loops.
 //!
-//! This module lives in the CLI crate (not `hematite-core`) because it must
-//! import `hematite_file::wad_adapter::WadFile`, and `hematite-core` is
-//! deliberately free of file-format-crate dependencies.
+//! This module lives in the orchestrate crate (not `hematite-core`) because
+//! it must import `hematite_file::wad_adapter::WadFile`, and `hematite-core`
+//! is deliberately free of file-format-crate dependencies.
 
 use crate::live_provider::LiveGameProvider;
 use anyhow::{Context, Result};
@@ -494,10 +494,8 @@ mod tests {
         provider: &dyn BinProvider,
         graph: &std::collections::HashMap<String, Vec<u8>>,
     ) -> u32 {
-        let mut seen: HashSet<String> = all_files
-            .iter()
-            .map(|(_, p, _)| p.to_lowercase())
-            .collect();
+        let mut seen: HashSet<String> =
+            all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
         let mut iterations = 0u32;
         loop {
             let mut referenced: HashSet<String> = HashSet::new();
@@ -510,7 +508,9 @@ mod tests {
                 all_files.iter().map(|(_, p, _)| p.to_lowercase()).collect();
             let to_pull: Vec<String> = referenced
                 .into_iter()
-                .filter(|p| !seen.contains(&p.to_lowercase()) && !present.contains(&p.to_lowercase()))
+                .filter(|p| {
+                    !seen.contains(&p.to_lowercase()) && !present.contains(&p.to_lowercase())
+                })
                 .collect();
             if to_pull.is_empty() {
                 break;
@@ -546,8 +546,7 @@ mod tests {
 
         let iters = run_closure(&mut all_files, &FakeBinProvider, &graph);
 
-        let pulled: HashSet<String> =
-            all_files.iter().map(|(_, p, _)| p.clone()).collect();
+        let pulled: HashSet<String> = all_files.iter().map(|(_, p, _)| p.clone()).collect();
         assert!(pulled.contains("b.bin"));
         assert!(pulled.contains("c.bin"));
         assert!(pulled.contains("d.bin"));
@@ -665,7 +664,10 @@ mod tests {
         let mut index = hematite_live::GameIndex::new(&install);
         assert!(index.add_champion("Yone"));
 
-        let provider = LiveGameProvider::new(index, Box::new(hematite_file::bin_adapter::FileBinProvider::new()));
+        let provider = LiveGameProvider::new(
+            index,
+            Box::new(hematite_file::bin_adapter::FileBinProvider::new()),
+        );
         let mut source = LiveSource::new(&provider);
 
         let hash = wad_path_hash("data/characters/yone/skins/skin0.bin");
@@ -725,7 +727,10 @@ mod tests {
         let mut index = hematite_live::GameIndex::new(&install);
         assert!(index.add_champion("Yone"));
 
-        let provider = LiveGameProvider::new(index, Box::new(hematite_file::bin_adapter::FileBinProvider::new()));
+        let provider = LiveGameProvider::new(
+            index,
+            Box::new(hematite_file::bin_adapter::FileBinProvider::new()),
+        );
 
         let mut all_files = vec![(
             0u64,
@@ -734,8 +739,7 @@ mod tests {
         )];
 
         let opts = RepathOptions::new("test");
-        let stats =
-            resolve_from_live(&provider, &mut all_files, &FakeBinProvider, &opts).unwrap();
+        let stats = resolve_from_live(&provider, &mut all_files, &FakeBinProvider, &opts).unwrap();
 
         assert_eq!(stats.files_pulled, 1);
         assert_eq!(stats.missing_unresolved, 0);

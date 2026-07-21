@@ -91,9 +91,8 @@ pub fn restore_missing_anms(
         return stats;
     }
 
-    let index = repath_core::WadIndex::from_entries(
-        all_files.iter().map(|(h, p, _)| (*h, p.clone())),
-    );
+    let index =
+        repath_core::WadIndex::from_entries(all_files.iter().map(|(h, p, _)| (*h, p.clone())));
 
     // Sort for deterministic ordering (HashSet iteration order isn't
     // stable, and stable output makes logs/tests reproducible).

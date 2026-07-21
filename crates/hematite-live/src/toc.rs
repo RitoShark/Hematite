@@ -81,7 +81,9 @@ pub fn read_toc_from(r: &mut (impl Read + Seek), path: PathBuf) -> Result<WadToc
     let count = read_u32(r)? as usize;
     // Sanity cap: a chunk record is 32 bytes; refuse absurd counts.
     if count > 4_000_000 {
-        return Err(LiveError::Decompress(format!("chunk count {count} too large")));
+        return Err(LiveError::Decompress(format!(
+            "chunk count {count} too large"
+        )));
     }
     let mut chunks = Vec::with_capacity(count);
     for _ in 0..count {
@@ -127,7 +129,7 @@ mod tests {
         v.push(major);
         v.push(minor);
         v.extend_from_slice(&[0u8; 256]); // signature
-        v.extend_from_slice(&[0u8; 8]);   // checksum
+        v.extend_from_slice(&[0u8; 8]); // checksum
         v.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
         for &(hash, off, csz, usz, ty) in chunks {
             v.extend_from_slice(&hash.to_le_bytes());
@@ -135,7 +137,7 @@ mod tests {
             v.extend_from_slice(&csz.to_le_bytes());
             v.extend_from_slice(&usz.to_le_bytes());
             v.push(ty);
-            v.push(0);                       // duplicate
+            v.push(0); // duplicate
             v.extend_from_slice(&0u16.to_le_bytes()); // pad / subchunk_start
             v.extend_from_slice(&0u64.to_le_bytes()); // per-chunk checksum
         }

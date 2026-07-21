@@ -185,10 +185,7 @@ mod tests {
     impl MockHashProvider {
         fn new() -> Self {
             let mut types = HashMap::new();
-            types.insert(
-                "skincharacterdataproperties".to_string(),
-                0x1234,
-            );
+            types.insert("skincharacterdataproperties".to_string(), 0x1234);
             Self { types }
         }
     }
@@ -322,11 +319,7 @@ mod tests {
         let empty_game = EmptyGameProvider;
         ctx.game = Some(&empty_game);
 
-        let dead = collect_dead_links(
-            &ctx,
-            "SkinCharacterDataProperties",
-            &[gear_target()],
-        );
+        let dead = collect_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
 
         assert_eq!(dead, vec![(0, 0x1234)]);
     }
@@ -352,11 +345,7 @@ mod tests {
         let empty_game = EmptyGameProvider;
         ctx.game = Some(&empty_game);
 
-        let dead = collect_dead_links(
-            &ctx,
-            "SkinCharacterDataProperties",
-            &[gear_target()],
-        );
+        let dead = collect_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
 
         assert!(dead.is_empty());
     }
@@ -378,11 +367,7 @@ mod tests {
         // verify: with no game provider, the rule must not fire.
         assert!(ctx.game.is_none());
 
-        let dead = collect_dead_links(
-            &ctx,
-            "SkinCharacterDataProperties",
-            &[gear_target()],
-        );
+        let dead = collect_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
         // Without game info, the entry is still "not found" in tree/linked
         // trees, so collect_dead_links (the pure algorithm) still reports
         // it as dead — the fail-open guard lives in detect_issue/detect_dead_entry_link.
@@ -418,11 +403,7 @@ mod tests {
         let mut ctx = base_ctx(tree, &hashes, &wad);
         ctx.game = Some(&game);
 
-        let dead = collect_dead_links(
-            &ctx,
-            "SkinCharacterDataProperties",
-            &[gear_target()],
-        );
+        let dead = collect_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
 
         assert!(dead.is_empty());
     }

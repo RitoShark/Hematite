@@ -15,7 +15,11 @@ use std::path::{Path, PathBuf};
 
 const GAME_EXE: &str = "League of Legends.exe";
 const GAME_DIR: &str = "Game";
-const PROCESS_NAMES: &[&str] = &["LeagueClientUx.exe", "LeagueClient.exe", "League of Legends.exe"];
+const PROCESS_NAMES: &[&str] = &[
+    "LeagueClientUx.exe",
+    "LeagueClient.exe",
+    "League of Legends.exe",
+];
 const FALLBACK_DRIVES: &[&str] = &["C:", "D:", "E:", "F:", "G:", "H:"];
 const COMMON_SUBPATHS: &[&str] = &[
     "Riot Games\\League of Legends",
@@ -40,12 +44,20 @@ impl LeagueInstall {
         // Case 1: p is the Game dir (contains the game exe directly).
         if p.join(GAME_EXE).is_file() {
             let root = p.parent().unwrap_or(p).to_path_buf();
-            return Ok(Self { root, game_dir: p.to_path_buf(), auto_detected: false });
+            return Ok(Self {
+                root,
+                game_dir: p.to_path_buf(),
+                auto_detected: false,
+            });
         }
         // Case 2: p is the install root.
         let game = p.join(GAME_DIR);
         if game.join(GAME_EXE).is_file() {
-            return Ok(Self { root: p.to_path_buf(), game_dir: game, auto_detected: false });
+            return Ok(Self {
+                root: p.to_path_buf(),
+                game_dir: game,
+                auto_detected: false,
+            });
         }
         Err(LiveError::InvalidInstall(p.to_path_buf()))
     }
@@ -53,7 +65,11 @@ impl LeagueInstall {
     fn from_root_detected(root: PathBuf) -> Option<Self> {
         let game = root.join(GAME_DIR);
         if game.join(GAME_EXE).is_file() {
-            Some(Self { root, game_dir: game, auto_detected: true })
+            Some(Self {
+                root,
+                game_dir: game,
+                auto_detected: true,
+            })
         } else {
             None
         }
@@ -141,7 +157,8 @@ fn detect_from_registry() -> Option<LeagueInstall> {
     // Line shape: "    Location    REG_SZ    C:\Riot Games\League of Legends"
     let loc = text.lines().find_map(|l| {
         let l = l.trim();
-        l.contains("REG_SZ").then(|| l.split("REG_SZ").nth(1).map(str::trim))?
+        l.contains("REG_SZ")
+            .then(|| l.split("REG_SZ").nth(1).map(str::trim))?
     })?;
     LeagueInstall::from_root_detected(PathBuf::from(loc))
 }
@@ -198,6 +215,8 @@ mod tests {
         }"#;
         let paths = league_paths_from_riot_installs_json(json);
         assert_eq!(paths.len(), 1);
-        assert!(paths[0].ends_with("League of Legends") || paths[0].ends_with("League of Legends/"));
+        assert!(
+            paths[0].ends_with("League of Legends") || paths[0].ends_with("League of Legends/")
+        );
     }
 }

@@ -35,12 +35,13 @@ pub fn build_wad<W: Write + Seek>(
 
     builder
         .build_to_writer(writer, |path_hash, out| {
-            let (_, path, bytes) = files
-                .iter()
-                .find(|(h, _, _)| *h == path_hash)
-                .ok_or_else(|| {
-                    rs_wad::Error::Build(format!("Missing file for hash {:016X}", path_hash))
-                })?;
+            let (_, path, bytes) =
+                files
+                    .iter()
+                    .find(|(h, _, _)| *h == path_hash)
+                    .ok_or_else(|| {
+                        rs_wad::Error::Build(format!("Missing file for hash {:016X}", path_hash))
+                    })?;
 
             tracing::trace!("Writing chunk: {} ({} bytes)", path, bytes.len());
             out.write_all(bytes).map_err(rs_io::Error::from)?;

@@ -128,7 +128,9 @@ pub fn rs_bin_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
         }
 
         // Collections
-        BinValue::List { is_list2, items, .. } => {
+        BinValue::List {
+            is_list2, items, ..
+        } => {
             let mut vec = Vec::with_capacity(items.len());
             for item in items {
                 vec.push(rs_bin_value_to_hematite(item)?);

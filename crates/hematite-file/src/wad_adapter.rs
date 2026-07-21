@@ -110,8 +110,8 @@ impl FileWadProvider {
 
     /// Build from a WAD file on disk.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let wad = Wad::from_path(path)
-            .with_context(|| format!("Failed to open WAD: {:?}", path))?;
+        let wad =
+            Wad::from_path(path).with_context(|| format!("Failed to open WAD: {:?}", path))?;
         Ok(Self::from_wad(&wad))
     }
 

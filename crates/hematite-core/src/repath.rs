@@ -942,9 +942,9 @@ mod tests {
             dummy_hash,
         );
         assert_eq!(r.strings_repathed, 1);
-        
+
         let expected_repathed = "ASSETS/.yone1_characters/yone/skins/skin0/yone.scb";
-        
+
         // The value in the tree should be mutated to the aligned new extension
         let obj = tree.objects.get(&0x5678).unwrap();
         let prop = obj.properties.get(&0x1).unwrap();
@@ -956,11 +956,15 @@ mod tests {
 
         // Both original and actual keys should map to the repathed path
         assert_eq!(
-            r.mapping.get("assets/characters/yone/skins/skin0/yone.sco").unwrap(),
+            r.mapping
+                .get("assets/characters/yone/skins/skin0/yone.sco")
+                .unwrap(),
             expected_repathed
         );
         assert_eq!(
-            r.mapping.get("assets/characters/yone/skins/skin0/yone.scb").unwrap(),
+            r.mapping
+                .get("assets/characters/yone/skins/skin0/yone.scb")
+                .unwrap(),
             expected_repathed
         );
     }
@@ -1011,9 +1015,7 @@ mod tests {
     #[test]
     fn linked_deps_skipped_when_file_absent() {
         let mut tree = make_tree_with_string("dummy");
-        tree.linked = vec![
-            "data/characters/yone/animations/skin0.bin".to_string(),
-        ];
+        tree.linked = vec!["data/characters/yone/animations/skin0.bin".to_string()];
         let idx = WadIndex::new(); // Empty index
 
         let r = repath_bin_strings(
@@ -1170,7 +1172,10 @@ mod tests {
 
         // Verify the string inside the tree was updated to the repathed path with forward slashes
         let strings = crate::walk::extract_strings(&tree);
-        assert_eq!(strings[0], "ASSETS/.yone1_characters/yone/skins/skin0/yone.dds");
+        assert_eq!(
+            strings[0],
+            "ASSETS/.yone1_characters/yone/skins/skin0/yone.dds"
+        );
     }
 
     #[test]
@@ -1206,15 +1211,24 @@ mod tests {
         assert_eq!(placeholders.len(), 3);
 
         // my_color-hold.dds is converted to .tex and matches colorwhiteplaceholder
-        let p0 = placeholders.iter().find(|(path, _)| path == "path/to/my_color-hold.tex").unwrap();
+        let p0 = placeholders
+            .iter()
+            .find(|(path, _)| path == "path/to/my_color-hold.tex")
+            .unwrap();
         assert_eq!(p0.1, WHITE_BYTES);
 
         // my_toonshading.tex matches toonshading
-        let p1 = placeholders.iter().find(|(path, _)| path == "path/to/my_toonshading.tex").unwrap();
+        let p1 = placeholders
+            .iter()
+            .find(|(path, _)| path == "path/to/my_toonshading.tex")
+            .unwrap();
         assert_eq!(p1.1, TOON_BYTES);
 
         // nothing_special.dds falls back to INVIS_TEX
-        let p2 = placeholders.iter().find(|(path, _)| path == "path/to/nothing_special.tex").unwrap();
+        let p2 = placeholders
+            .iter()
+            .find(|(path, _)| path == "path/to/nothing_special.tex")
+            .unwrap();
         assert_eq!(p2.1, INVIS_TEX);
     }
 }

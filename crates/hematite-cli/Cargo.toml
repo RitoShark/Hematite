@@ -14,6 +14,7 @@ hematite-types = { workspace = true }
 hematite-core = { workspace = true }
 hematite-file = { workspace = true }
 hematite-live = { workspace = true }
+hematite-orchestrate = { path = "../hematite-orchestrate" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

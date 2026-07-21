@@ -32,8 +32,9 @@ pub(crate) fn decompress(raw: &[u8], chunk: &TocChunk) -> Result<Vec<u8>, LiveEr
                 .map_err(|e| LiveError::Decompress(e.to_string()))?;
             Ok(out)
         }
-        Compression::Zstd | Compression::ZstdMulti => zstd::stream::decode_all(raw)
-            .map_err(|e| LiveError::Decompress(e.to_string())),
+        Compression::Zstd | Compression::ZstdMulti => {
+            zstd::stream::decode_all(raw).map_err(|e| LiveError::Decompress(e.to_string()))
+        }
         Compression::Satellite => Err(LiveError::UnsupportedCompression(2)),
     }
 }

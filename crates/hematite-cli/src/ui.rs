@@ -163,3 +163,26 @@ impl Default for UiReporter {
         Self::silent()
     }
 }
+
+/// Adapter exposing a [`UiReporter`] as an orchestrate
+/// [`hematite_orchestrate::ProgressSink`], so the lifted folder pipeline can
+/// drive the CLI progress bar without depending on the CLI crate.
+pub struct UiSink<'a>(pub &'a UiReporter);
+
+impl hematite_orchestrate::ProgressSink for UiSink<'_> {
+    fn stage(&self, label: &str) {
+        self.0.stage(label);
+    }
+    fn fix_applied(&self, name: &str, count: Option<u32>) {
+        self.0.fix_applied(name, count);
+    }
+    fn note(&self, message: &str) {
+        self.0.note(message);
+    }
+    fn set_length(&self, total: u64) {
+        self.0.set_length(total);
+    }
+    fn tick(&self) {
+        self.0.tick();
+    }
+}

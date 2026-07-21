@@ -1,0 +1,21 @@
+[package]
+name = "hematite-orchestrate"
+description = "Folder-level fix orchestration — the extract → detect → fix → recover → rebuild pipeline as a library"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+hematite-types = { workspace = true }
+hematite-core = { workspace = true }
+hematite-file = { workspace = true }
+hematite-live = { workspace = true }
+anyhow = { workspace = true }
+tracing = "0.1"
+walkdir = "2"
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = "3.10"
+zstd = "0.13"
+indexmap = { workspace = true }

@@ -43,7 +43,12 @@ pub fn dds_to_tex(dds_bytes: &[u8]) -> Result<Vec<u8>> {
     let mip_count = dds_header_mip_count(dds_bytes).unwrap_or(1);
     let has_mipmaps = mip_count > 1;
 
-    tracing::debug!("Converting DDS: {}x{}, {} mipmaps", width, height, mip_count);
+    tracing::debug!(
+        "Converting DDS: {}x{}, {} mipmaps",
+        width,
+        height,
+        mip_count
+    );
 
     // Determine the output TEX format from the DDS header. rs_tex can only
     // *encode* BC1/BC3/BC5/BC7, so an uncompressed BGRA8 source is built
@@ -169,8 +174,8 @@ pub fn tex_to_dds_lossless(tex_data: &[u8]) -> Option<Vec<u8>> {
 
     let (four_cc, bytes_per_block, block_dim, is_compressed): (&[u8; 4], usize, usize, bool) =
         match tex_format {
-            10 => (b"DXT1", 8, 4, true),  // Bc1
-            12 => (b"DXT5", 16, 4, true), // Bc3
+            10 => (b"DXT1", 8, 4, true),      // Bc1
+            12 => (b"DXT5", 16, 4, true),     // Bc3
             20 => (b"\0\0\0\0", 4, 1, false), // Bgra8
             _ => return None,
         };
@@ -213,7 +218,11 @@ pub fn tex_to_dds_lossless(tex_data: &[u8]) -> Option<Vec<u8>> {
 
     dds.extend_from_slice(b"DDS "); // magic
     dds.extend_from_slice(&124u32.to_le_bytes()); // dwSize
-    let flags: u32 = 0x1 | 0x2 | 0x4 | 0x1000 | if has_mipmaps { 0x20000 } else { 0 }
+    let flags: u32 = 0x1
+        | 0x2
+        | 0x4
+        | 0x1000
+        | if has_mipmaps { 0x20000 } else { 0 }
         | if is_compressed { 0x80000 } else { 0x8 };
     dds.extend_from_slice(&flags.to_le_bytes()); // dwFlags
     dds.extend_from_slice(&height.to_le_bytes()); // dwHeight

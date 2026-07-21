@@ -106,65 +106,77 @@ pub fn apply(ctx: &mut FixContext, entry_type: &str) -> u32 {
                 continue;
             };
 
-            if let PropertyValue::Container(emitters) | PropertyValue::UnorderedContainer(emitters) = &mut prop.value {
+            if let PropertyValue::Container(emitters)
+            | PropertyValue::UnorderedContainer(emitters) = &mut prop.value
+            {
                 for emitter_val in emitters.iter_mut() {
                     let emitter = match emitter_val {
                         PropertyValue::Embedded(e) | PropertyValue::Struct(e) => e,
                         _ => continue,
                     };
-                    
+
                     let is_emitter = emitter.class_hash == complex_emitter_hash
                         || emitter.class_hash == simple_emitter_hash
-                        || vfx_emitter_hash.map(|h| h == emitter.class_hash).unwrap_or(false)
-                        || particle_emitter_hash.map(|h| h == emitter.class_hash).unwrap_or(false);
-                        
+                        || vfx_emitter_hash
+                            .map(|h| h == emitter.class_hash)
+                            .unwrap_or(false)
+                        || particle_emitter_hash
+                            .map(|h| h == emitter.class_hash)
+                            .unwrap_or(false);
+
                     if !is_emitter {
                         continue;
                     }
 
-                        // Swap-remove the shape property so we can own and modify it,
-                        // then re-insert under the new field hash.
-                        let old_shape_prop = emitter.properties.swap_remove(&shape_hash.0);
-                        if let Some(old_prop) = old_shape_prop {
-                            let was_struct = matches!(old_prop.value, PropertyValue::Struct(_));
-                            if let PropertyValue::Embedded(mut shape) | PropertyValue::Struct(mut shape) = old_prop.value {
-                                let analysis = analyze_shape(&shape, &hashes);
+                    // Swap-remove the shape property so we can own and modify it,
+                    // then re-insert under the new field hash.
+                    let old_shape_prop = emitter.properties.swap_remove(&shape_hash.0);
+                    if let Some(old_prop) = old_shape_prop {
+                        let was_struct = matches!(old_prop.value, PropertyValue::Struct(_));
+                        if let PropertyValue::Embedded(mut shape)
+                        | PropertyValue::Struct(mut shape) = old_prop.value
+                        {
+                            let analysis = analyze_shape(&shape, &hashes);
 
-                                if analysis.needs_fix {
-                                    apply_shape_conversion(&mut shape, &analysis, &hashes);
+                            if analysis.needs_fix {
+                                apply_shape_conversion(&mut shape, &analysis, &hashes);
 
-                                    if let Some(birth_vec) = analysis.birth_translation_vec3 {
-                                        move_birth_translation_outside(
-                                            emitter,
-                                            birth_vec,
-                                            hashes.constant_value,
-                                        );
-                                    }
-
-                                    // Re-insert under new field hash, as Struct (not Embedded).
-                                    emitter.properties.insert(
-                                        NEW_SHAPE_HASH,
-                                        BinProperty {
-                                            name_hash: FieldHash(NEW_SHAPE_HASH),
-                                            value: PropertyValue::Struct(shape),
-                                        },
-                                    );
-                                    changes += 1;
-                                } else {
-                                    // No fix needed — restore original.
-                                    emitter.properties.insert(
-                                        shape_hash.0,
-                                        BinProperty {
-                                            name_hash: shape_hash,
-                                            value: if was_struct { PropertyValue::Struct(shape) } else { PropertyValue::Embedded(shape) },
-                                        },
+                                if let Some(birth_vec) = analysis.birth_translation_vec3 {
+                                    move_birth_translation_outside(
+                                        emitter,
+                                        birth_vec,
+                                        hashes.constant_value,
                                     );
                                 }
+
+                                // Re-insert under new field hash, as Struct (not Embedded).
+                                emitter.properties.insert(
+                                    NEW_SHAPE_HASH,
+                                    BinProperty {
+                                        name_hash: FieldHash(NEW_SHAPE_HASH),
+                                        value: PropertyValue::Struct(shape),
+                                    },
+                                );
+                                changes += 1;
                             } else {
-                                // Not an Embedded/Struct value (e.g. already converted to something else?) — restore.
-                                emitter.properties.insert(shape_hash.0, old_prop);
+                                // No fix needed — restore original.
+                                emitter.properties.insert(
+                                    shape_hash.0,
+                                    BinProperty {
+                                        name_hash: shape_hash,
+                                        value: if was_struct {
+                                            PropertyValue::Struct(shape)
+                                        } else {
+                                            PropertyValue::Embedded(shape)
+                                        },
+                                    },
+                                );
                             }
+                        } else {
+                            // Not an Embedded/Struct value (e.g. already converted to something else?) — restore.
+                            emitter.properties.insert(shape_hash.0, old_prop);
                         }
+                    }
                     // End of emitter block
                 }
             }
