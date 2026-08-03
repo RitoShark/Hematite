@@ -442,7 +442,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            json_to_value(&serde_json::json!(3.14), "f32").unwrap(),
+            json_to_value(&serde_json::json!(2.5), "f32").unwrap(),
             PropertyValue::F32(_)
         ));
     }

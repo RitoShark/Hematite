@@ -14,11 +14,11 @@ indexmap = { workspace = true }
 # League file parsing — THIS IS THE ONLY CRATE THAT DEPENDS ON THE RITOSHARK CRATES.
 # When the file-format crates break their API, only this crate needs updating.
 # Using git versions (pinned rev) to match the project's CI convention.
-rs_io = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "fcd5948" }
-rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "fcd5948" }
-rs_wad = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "fcd5948" }
-rs_tex = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "fcd5948" }
-rs_mesh = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "fcd5948" }
+rs_io = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "9bd8d01" }
+rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "9bd8d01" }
+rs_wad = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "9bd8d01" }
+rs_tex = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "9bd8d01" }
+rs_mesh = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "9bd8d01" }
 
 # Image type shared with rs_tex's encode/decode API.
 image = { version = "0.25", default-features = false }

@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn discover_deduplicates() {
-        let paths = vec![
+        let paths = [
             "data/characters/yone/skins/skin0.bin",
             "DATA/Characters/Yone/Skins/Skin0.bin", // duplicate via case
             "data/characters/jinxmine/skins/skin0.bin",

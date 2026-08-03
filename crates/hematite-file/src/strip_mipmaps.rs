@@ -266,7 +266,7 @@ mod tests {
             let w = (width >> level).max(1);
             let h = (height >> level).max(1);
             let bytes = (w as usize).div_ceil(4) * (h as usize).div_ceil(4) * 16;
-            data.extend(std::iter::repeat(level as u8).take(bytes));
+            data.extend(std::iter::repeat_n(level as u8, bytes));
         }
         data
     }
@@ -286,11 +286,11 @@ mod tests {
                 let w = (width >> level).max(1);
                 let h = (height >> level).max(1);
                 let bytes = (w as usize).div_ceil(4) * (h as usize).div_ceil(4) * 16;
-                data.extend(std::iter::repeat(level as u8).take(bytes));
+                data.extend(std::iter::repeat_n(level as u8, bytes));
             }
         } else {
             let bytes = (width as usize).div_ceil(4) * (height as usize).div_ceil(4) * 16;
-            data.extend(std::iter::repeat(0xAA).take(bytes));
+            data.extend(std::iter::repeat_n(0xAA, bytes));
         }
         data
     }

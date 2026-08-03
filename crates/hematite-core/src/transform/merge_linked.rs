@@ -116,13 +116,17 @@ mod tests {
     #[test]
     fn test_recursive_merge_and_override_semantics() {
         // 1. Setup primary tree with dependencies on spell1 and spell2
-        let mut main_tree = BinTree::default();
-        main_tree.linked = vec!["spell1.bin".to_string(), "spell2.bin".to_string()];
+        let mut main_tree = BinTree {
+            linked: vec!["spell1.bin".to_string(), "spell2.bin".to_string()],
+            ..Default::default()
+        };
         main_tree.objects.insert(100, make_dummy_object(999, 100)); // class_hash 999 is root's version
 
         // 2. Setup linked spell1 (depends on particle)
-        let mut spell1 = BinTree::default();
-        spell1.linked = vec!["particle.bin".to_string()];
+        let mut spell1 = BinTree {
+            linked: vec!["particle.bin".to_string()],
+            ..Default::default()
+        };
         spell1.objects.insert(100, make_dummy_object(111, 100)); // Should be overridden by root's 100
         spell1.objects.insert(200, make_dummy_object(111, 200)); // New, should be merged
 
