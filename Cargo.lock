@@ -1763,7 +1763,7 @@ dependencies = [
 [[package]]
 name = "rs_bin"
 version = "0.1.0"
-source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=f646d96#f646d96e6f907e433a4ac0be2fab9dedf61cdde0"
+source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=c6f2d39#c6f2d39f0f606f165aad68bbf51ebec12e75ba1e"
 dependencies = [
  "indexmap",
  "rs_hash",
@@ -1775,7 +1775,7 @@ dependencies = [
 [[package]]
 name = "rs_hash"
 version = "0.1.0"
-source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=f646d96#f646d96e6f907e433a4ac0be2fab9dedf61cdde0"
+source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=c6f2d39#c6f2d39f0f606f165aad68bbf51ebec12e75ba1e"
 dependencies = [
  "thiserror 2.0.18",
  "xxhash-rust",
@@ -1784,7 +1784,7 @@ dependencies = [
 [[package]]
 name = "rs_io"
 version = "0.1.0"
-source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=f646d96#f646d96e6f907e433a4ac0be2fab9dedf61cdde0"
+source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=c6f2d39#c6f2d39f0f606f165aad68bbf51ebec12e75ba1e"
 dependencies = [
  "memmap2",
  "rs_math",
@@ -1794,7 +1794,7 @@ dependencies = [
 [[package]]
 name = "rs_math"
 version = "0.1.0"
-source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=f646d96#f646d96e6f907e433a4ac0be2fab9dedf61cdde0"
+source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=c6f2d39#c6f2d39f0f606f165aad68bbf51ebec12e75ba1e"
 dependencies = [
  "glam",
 ]
@@ -1802,7 +1802,7 @@ dependencies = [
 [[package]]
 name = "rs_mesh"
 version = "0.1.0"
-source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=f646d96#f646d96e6f907e433a4ac0be2fab9dedf61cdde0"
+source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=c6f2d39#c6f2d39f0f606f165aad68bbf51ebec12e75ba1e"
 dependencies = [
  "rs_io",
  "rs_math",
@@ -1812,7 +1812,7 @@ dependencies = [
 [[package]]
 name = "rs_tex"
 version = "0.1.0"
-source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=f646d96#f646d96e6f907e433a4ac0be2fab9dedf61cdde0"
+source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=c6f2d39#c6f2d39f0f606f165aad68bbf51ebec12e75ba1e"
 dependencies = [
  "ddsfile",
  "image",
@@ -1827,7 +1827,7 @@ dependencies = [
 [[package]]
 name = "rs_wad"
 version = "0.1.0"
-source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=f646d96#f646d96e6f907e433a4ac0be2fab9dedf61cdde0"
+source = "git+https://github.com/RitoShark/RitoShark-Crates.git?rev=c6f2d39#c6f2d39f0f606f165aad68bbf51ebec12e75ba1e"
 dependencies = [
  "flate2",
  "rs_hash",
