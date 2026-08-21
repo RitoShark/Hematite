@@ -7,10 +7,10 @@
 //!    ones that point at files actually present in the mod (or extension
 //!    alternates: `.dds` ↔ `.tex`, `.sco` ↔ `.scb`). Returns the new paths
 //!    so the WAD step can re-hash entries to match.
-//! 3. [`repath_wad_path`] — compute the new WAD path for any non-root file.
-//!    Unlike older versions of this module, **linked BINs are repathed
-//!    too** — the only BIN the engine resolves by hard-coded path is the
-//!    "root" character / skin BIN (see [`is_root_skin_bin`]).
+//! 3. [`repath_wad_path`] — compute the new WAD path for any non-BIN file.
+//!    **BIN files are never repathed** — the engine resolves the whole BIN
+//!    chain (root skin BIN, `linked:` animation/data BINs) by canonical
+//!    path, so both the `linked:` entries and the `.bin` chunks stay put.
 //! 4. [`missing_invis_placeholders`] — opt-in injection of invisible
 //!    placeholder textures for repathed texture refs that have no real file.
 //!
@@ -445,6 +445,11 @@ pub fn repath_bin_strings(
             if !is_repath_candidate(value, self.skip_vo) {
                 return VisitResult::Skip;
             }
+            // BIN references resolve by canonical path (see repath_wad_path);
+            // the chunk never moves, so the reference must not either.
+            if value.to_lowercase().ends_with(".bin") {
+                return VisitResult::Skip;
+            }
             // Resolve the actual path that exists in the mod's WAD index.
             let actual_path = match self.index.get_actual_path(value, self.hash_fn) {
                 Some(p) => p,
@@ -488,52 +493,9 @@ pub fn repath_bin_strings(
         mapping: HashMap::new(),
     };
 
-    let mut count = walk_tree(tree, &mut visitor);
-
-    // Repath linked dependencies too (the walker doesn't visit them).
-    // Same rule: only repath when present in mod's WAD.
-    for link in tree.linked.iter_mut() {
-        if !is_repath_candidate(link, opts.skip_vo) {
-            continue;
-        }
-        // Root skin/champion BINs are loaded by the engine at fixed paths.
-        if is_root_skin_bin(link) {
-            continue;
-        }
-        let actual_path = match index.get_actual_path(link, hash_fn) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        let mut new_path = repath_path(link, &opts.prefix, opts.layout);
-
-        // Align extensions if the reference differs from the actual file in WAD
-        let lower_link = link.to_lowercase().replace('\\', "/");
-        if lower_link != actual_path {
-            if let Some(ext) = actual_path.split('.').next_back() {
-                if let Some(dot) = new_path.rfind('.') {
-                    new_path = format!("{}.{}", &new_path[..dot], ext);
-                }
-            }
-        }
-
-        if new_path == *link {
-            continue;
-        }
-
-        // Map both the original reference and the actual path to the new repathed path
-        visitor
-            .mapping
-            .entry(lower_link)
-            .or_insert_with(|| new_path.clone());
-        visitor
-            .mapping
-            .entry(actual_path)
-            .or_insert_with(|| new_path.clone());
-
-        *link = new_path;
-        count += 1;
-    }
+    // `tree.linked` is deliberately NOT rewritten: the engine resolves the
+    // linked-BIN chain by canonical path, and the `.bin` chunks never move.
+    let count = walk_tree(tree, &mut visitor);
 
     RepathBinResult {
         strings_repathed: count,
@@ -548,9 +510,9 @@ pub fn repath_bin_strings(
 /// Compute the new WAD path for an entry, or `None` if the entry should
 /// keep its original path.
 ///
-/// **Root skin BINs are NEVER repathed** — the engine references them by
-/// hard-coded path. Linked / animation / data BINs *are* repathed so the
-/// repathed string references inside other BINs still resolve.
+/// **BIN files are NEVER repathed** — the engine resolves the whole BIN
+/// chain (root skin BIN and every `linked:` animation / data BIN) by
+/// canonical path, so moving any of them breaks resolution.
 /// Modder-root entries (`<handle>/file.ext`) are repathed too — their
 /// prefix gets prepended as a new top segment so the entry hash matches
 /// what `repath_path` produces for BIN string refs to that file.
@@ -562,8 +524,7 @@ pub fn repath_wad_path(path: &str, prefix: &str, layout: RepathLayout) -> Option
         // Custom hex hashes, plain VO entries, etc. — leave alone.
         return None;
     }
-    // Root skin / champion BINs are loaded by the engine at fixed paths.
-    if canonical && is_root_skin_bin(&lower) {
+    if lower.ends_with(".bin") {
         return None;
     }
     let new = repath_path(path, prefix, layout);
@@ -849,17 +810,21 @@ mod tests {
     }
 
     #[test]
-    fn repath_wad_path_repaths_linked_bin() {
-        // Animation BINs (linked from the root skin BIN) MUST be repathed
-        // because the string ref inside the root BIN is repathed.
-        assert_eq!(
-            repath_wad_path(
-                "data/characters/yone/animations/skin0.bin",
-                ".yone1_",
-                RepathLayout::InFolder
-            ),
-            Some("DATA/.yone1_characters/yone/animations/skin0.bin".to_string())
-        );
+    fn repath_wad_path_never_moves_bins() {
+        // The engine resolves the whole BIN chain (root + linked animation /
+        // data BINs) by canonical path — no BIN may ever move.
+        assert!(repath_wad_path(
+            "data/characters/yone/animations/skin0.bin",
+            ".yone1_",
+            RepathLayout::InFolder
+        )
+        .is_none());
+        assert!(repath_wad_path(
+            "data/yone_skins_skin0_skins_skin1.bin",
+            ".yone1_",
+            RepathLayout::InFolder
+        )
+        .is_none());
     }
 
     // -- BIN content repathing -----------------------------------------
@@ -1021,11 +986,11 @@ mod tests {
     }
 
     #[test]
-    fn linked_deps_repathed() {
+    fn linked_deps_never_repathed() {
         let mut tree = make_tree_with_string("dummy");
         tree.linked = vec![
-            "data/characters/yone/yone.bin".to_string(), // root — skip
-            "data/characters/yone/animations/skin0.bin".to_string(), // linked — repath
+            "data/characters/yone/yone.bin".to_string(),
+            "data/characters/yone/animations/skin0.bin".to_string(),
         ];
         let idx = WadIndex::from_entries(vec![
             (0, "data/characters/yone/yone.bin".to_string()),
@@ -1038,19 +1003,18 @@ mod tests {
             &idx,
             dummy_hash,
         );
-        assert_eq!(r.strings_repathed, 1);
+        assert_eq!(r.strings_repathed, 0);
         assert_eq!(tree.linked[0], "data/characters/yone/yone.bin");
-        assert_eq!(
-            tree.linked[1],
-            "DATA/.yone1_characters/yone/animations/skin0.bin"
-        );
+        assert_eq!(tree.linked[1], "data/characters/yone/animations/skin0.bin");
     }
 
     #[test]
-    fn linked_deps_skipped_when_file_absent() {
-        let mut tree = make_tree_with_string("dummy");
-        tree.linked = vec!["data/characters/yone/animations/skin0.bin".to_string()];
-        let idx = WadIndex::new(); // Empty index
+    fn bin_string_refs_never_repathed() {
+        let mut tree = make_tree_with_string("data/characters/yone/animations/skin0.bin");
+        let idx = WadIndex::from_entries(vec![(
+            0,
+            "data/characters/yone/animations/skin0.bin".to_string(),
+        )]);
 
         let r = repath_bin_strings(
             &mut tree,
@@ -1059,7 +1023,7 @@ mod tests {
             dummy_hash,
         );
         assert_eq!(r.strings_repathed, 0);
-        assert_eq!(tree.linked[0], "data/characters/yone/animations/skin0.bin");
+        assert!(r.mapping.is_empty());
     }
 
     // -- placeholders --------------------------------------------------
