@@ -15,6 +15,12 @@ use std::collections::HashMap;
 pub struct FixConfig {
     pub version: String,
     pub last_updated: String,
+    /// Central enable list: when present, a fix is enabled iff its ID is
+    /// listed here, and the per-rule `enabled` flags are ignored. When
+    /// absent, per-rule `enabled` governs (legacy configs). Read through
+    /// [`FixConfig::is_fix_enabled`], never the rule flag directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_fixes: Option<Vec<String>>,
     /// BIN-level fixes (operate on parsed BIN trees)
     pub fixes: HashMap<String, FixRule>,
     /// WAD-level fixes (operate on files before BIN parsing)
@@ -24,6 +30,22 @@ pub struct FixConfig {
     /// When `enabled` is true, drag-and-drop runs repathing automatically.
     #[serde(default)]
     pub repath: RepathConfig,
+}
+
+impl FixConfig {
+    /// Whether the fix with this ID is enabled — the single authority every
+    /// pipeline must consult (see `enabled_fixes`).
+    pub fn is_fix_enabled(&self, id: &str) -> bool {
+        match &self.enabled_fixes {
+            Some(list) => list.iter().any(|e| e == id),
+            None => self
+                .fixes
+                .get(id)
+                .map(|r| r.enabled)
+                .or_else(|| self.wad_fixes.get(id).map(|r| r.enabled))
+                .unwrap_or(false),
+        }
+    }
 }
 
 /// Default repath settings stored in `fix_config.json`.
@@ -82,6 +104,8 @@ impl Default for RepathConfig {
 pub struct FixRule {
     pub name: String,
     pub description: String,
+    /// Legacy per-rule flag — ignored when the config has `enabled_fixes`.
+    #[serde(default = "default_true")]
     pub enabled: bool,
     pub severity: String,
     #[serde(default)]
@@ -380,6 +404,8 @@ pub struct EntryValidationTarget {
 pub struct WadFixRule {
     pub name: String,
     pub description: String,
+    /// Legacy per-rule flag — ignored when the config has `enabled_fixes`.
+    #[serde(default = "default_true")]
     pub enabled: bool,
     pub severity: String,
     pub detect: WadDetectionRule,

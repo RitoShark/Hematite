@@ -60,7 +60,7 @@ pub fn apply_fixes_in_phase(
             continue;
         };
 
-        if !fix_rule.enabled || fix_rule.phase != phase {
+        if !config.is_fix_enabled(fix_id) || fix_rule.phase != phase {
             continue;
         }
 

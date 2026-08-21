@@ -749,10 +749,9 @@ pub fn apply_post_repath_fixes(
     use hematite_file::wad_adapter::FileWadProvider;
     use hematite_types::config::FixPhase;
 
-    let has_post_rules = config
-        .fixes
-        .iter()
-        .any(|(id, r)| r.enabled && r.phase == FixPhase::PostRepath && selected_fixes.contains(id));
+    let has_post_rules = config.fixes.iter().any(|(id, r)| {
+        config.is_fix_enabled(id) && r.phase == FixPhase::PostRepath && selected_fixes.contains(id)
+    });
     if !has_post_rules {
         return ProcessResult::default();
     }

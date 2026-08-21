@@ -373,14 +373,18 @@ mod tests {
     /// push "Fix rule not found" into result.errors, and main.rs bails on
     /// any error — i.e. every default invocation hard-fails. Never let
     /// ALL_FIX_IDS drift ahead of the config again.
-    #[test]
-    fn all_fix_ids_exist_in_repo_config() {
+    fn load_repo_config() -> hematite_types::config::FixConfig {
         let config_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/fix_config.json");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/fix_config.toml");
         let raw = std::fs::read_to_string(&config_path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", config_path.display()));
-        let config: hematite_types::config::FixConfig = serde_json::from_str(&raw)
-            .unwrap_or_else(|e| panic!("cannot parse {}: {e}", config_path.display()));
+        toml::from_str(&raw)
+            .unwrap_or_else(|e| panic!("cannot parse {}: {e}", config_path.display()))
+    }
+
+    #[test]
+    fn all_fix_ids_exist_in_repo_config() {
+        let config = load_repo_config();
 
         let missing: Vec<&&str> = ALL_FIX_IDS
             .iter()
@@ -408,14 +412,17 @@ mod tests {
             DetectionRule, TransformAction, WadDetectionRule, WadTransformAction,
         };
 
-        let config_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/fix_config.json");
-        let raw = std::fs::read_to_string(&config_path)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", config_path.display()));
-        let config: hematite_types::config::FixConfig = serde_json::from_str(&raw)
-            .unwrap_or_else(|e| panic!("cannot parse {}: {e}", config_path.display()));
+        let config = load_repo_config();
 
         assert_eq!(config.version, "2.3.0");
+
+        // The central enable list is the single authority — spot-check both
+        // directions plus a WAD-level entry.
+        assert!(config.enabled_fixes.is_some());
+        assert!(config.is_fix_enabled("gear_pull"));
+        assert!(config.is_fix_enabled("bnk_remover"));
+        assert!(!config.is_fix_enabled("vfx_entry_split"));
+        assert!(!config.is_fix_enabled("no_such_fix"));
 
         // file_ref_migration: class_field_is_string detect +
         // retype_string_to_file apply, post_repath phase (it destroys the
@@ -424,7 +431,7 @@ mod tests {
             .fixes
             .get("file_ref_migration")
             .expect("file_ref_migration rule missing");
-        assert!(file_refs.enabled);
+        assert!(config.is_fix_enabled("file_ref_migration"));
         assert_eq!(file_refs.severity, "critical");
         assert_eq!(
             file_refs.phase,
@@ -461,7 +468,7 @@ mod tests {
             .fixes
             .get("gear_pull")
             .expect("gear_pull rule missing");
-        assert!(gear_pull.enabled);
+        assert!(config.is_fix_enabled("gear_pull"));
         assert_eq!(gear_pull.severity, "critical");
         match &gear_pull.detect {
             DetectionRule::DeadEntryLink {
@@ -494,7 +501,7 @@ mod tests {
         // cac_pull: dead_entry_link detect + pull_entries_from_game apply
         // with NO nuke_fallback_field (drop-only behavior).
         let cac_pull = config.fixes.get("cac_pull").expect("cac_pull rule missing");
-        assert!(cac_pull.enabled);
+        assert!(config.is_fix_enabled("cac_pull"));
         assert_eq!(cac_pull.severity, "medium");
         match &cac_pull.detect {
             DetectionRule::DeadEntryLink { targets, .. } => {
@@ -522,7 +529,7 @@ mod tests {
             .fixes
             .get("resolve_dead_refs")
             .expect("resolve_dead_refs rule missing");
-        assert!(resolve_dead_refs.enabled);
+        assert!(config.is_fix_enabled("resolve_dead_refs"));
         assert_eq!(resolve_dead_refs.severity, "high");
         match &resolve_dead_refs.detect {
             DetectionRule::RecursiveStringExtensionNotInWad { extension, .. } => {
@@ -552,7 +559,7 @@ mod tests {
             .wad_fixes
             .get("combo_bin_relocate")
             .expect("combo_bin_relocate rule missing");
-        assert!(combo_bin_relocate.enabled);
+        assert!(config.is_fix_enabled("combo_bin_relocate"));
         matches!(
             combo_bin_relocate.detect,
             WadDetectionRule::FilePattern { .. }

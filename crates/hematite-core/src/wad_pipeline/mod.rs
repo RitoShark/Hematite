@@ -51,7 +51,7 @@ pub fn apply_wad_fixes(
             continue;
         };
 
-        if !fix_rule.enabled {
+        if !config.is_fix_enabled(fix_id) {
             continue;
         }
 

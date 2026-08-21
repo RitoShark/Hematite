@@ -74,7 +74,7 @@ hematite-v2/
 │   ├── hematite-live/    League install detection + live game file access
 │   └── hematite-cli/     CLI binary
 ├── config/
-│   ├── fix_config.json       fix rule definitions (remote-fetched, embedded fallback)
+│   ├── fix_config.toml       fix rule definitions (remote-fetched, embedded fallback; loader also accepts JSON)
 │   ├── champion_list.json    champion metadata + subchamp relationships
 │   └── version.json          CLI version manifest (powers the force-update gate)
 └── .github/workflows/
@@ -257,7 +257,7 @@ pipeline stages iterate over multiple skins.
 If your fix is expressible as one of the existing detection /
 transform variants, no Rust changes are needed.
 
-1. Edit [`config/fix_config.json`](config/fix_config.json), add an
+1. Edit [`config/fix_config.toml`](config/fix_config.toml), add an
    entry under `fixes` (BIN-level) or `wad_fixes` (WAD-level) following
    [Anatomy of a fix rule](#anatomy-of-a-fix-rule).
 2. Add the fix ID to `ALL_FIX_IDS` in
@@ -283,7 +283,7 @@ offline.
    [`crates/hematite-core/src/transform/mod.rs`](crates/hematite-core/src/transform/mod.rs).
 4. Write unit tests in the new module. Keep them table-driven where
    possible — the existing modules are a good reference.
-5. Add an example rule to `fix_config.json` (disabled by default until
+5. Add an example rule to `fix_config.toml` (leave it out of `enabled_fixes` until
    validated against real mods).
 
 If your transform needs to produce new BINs, push them to
@@ -301,7 +301,7 @@ For raw-bytes work (texture munging, file-level repair):
 2. Register it in
    [`crates/hematite-cli/src/process.rs`](crates/hematite-cli/src/process.rs)
    right next to the other `converter_registry.register(...)` lines.
-3. In `fix_config.json`, write a rule using
+3. In `fix_config.toml`, write a rule using
    `transform_bytes` (for same-extension transforms) or
    `convert_format` (for extension changes), referencing your
    converter by the registered name.

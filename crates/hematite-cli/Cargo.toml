@@ -39,6 +39,7 @@ ltk_modpkg = "0.6"
 # Remote config fetching
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 const_format = "0.2"
+toml = "0.8"
 
 # Semantic version comparison for the force-update gate
 semver = "1.0"

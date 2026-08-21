@@ -113,10 +113,10 @@ fn detect_only_reports_fixes_and_writes_nothing() {
     // drives detection.
     let raw = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../config/fix_config.json"
+        "/../../config/fix_config.toml"
     ))
     .unwrap();
-    let config: FixConfig = serde_json::from_str(&raw).unwrap();
+    let config: FixConfig = toml::from_str(&raw).unwrap();
 
     // Build a synthetic .wad.client folder containing one triggering BIN.
     let tmp = tempfile::tempdir().unwrap();
@@ -198,10 +198,10 @@ fn detect_only_reports_fixes_and_writes_nothing() {
 fn in_place_run_writes_to_source_no_fixed_copy() {
     let raw = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../config/fix_config.json"
+        "/../../config/fix_config.toml"
     ))
     .unwrap();
-    let config: FixConfig = serde_json::from_str(&raw).unwrap();
+    let config: FixConfig = toml::from_str(&raw).unwrap();
 
     let tmp = tempfile::tempdir().unwrap();
     let wad_folder = tmp.path().join("Test.wad.client");

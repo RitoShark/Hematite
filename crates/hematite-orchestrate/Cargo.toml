@@ -19,3 +19,4 @@ serde_json = { workspace = true }
 tempfile = "3.10"
 zstd = "0.13"
 indexmap = { workspace = true }
+toml = "0.8"

@@ -1,0 +1,462 @@
+version = "2.3.0"
+last_updated = "2026-08-21"
+
+enabled_fixes = [
+    "file_ref_migration",
+    "merge_linked_bins",
+    "healthbar_fix",
+    "staticmat_texturepath",
+    "staticmat_samplername",
+    "black_icons",
+    "dds_to_tex",
+    "champion_bin_remover",
+    "vfx_shape_fix",
+    "shader_fallback",
+    "entry_validator",
+    "gear_pull",
+    "cac_pull",
+    "resolve_dead_refs",
+    "bnk_remover",
+    "dds_texture_converter",
+    "sco_mesh_converter",
+    "anm_remover",
+    "fix_tex_dimensions",
+    "combo_bin_relocate",
+]
+
+[repath]
+enabled = true
+prefix = "hematite"
+invis_texture = true
+skip_vo = true
+placeholder_rules = [
+    { pattern = "(?i)coloroverlifetime|color-hold|colorhold", asset = "colorwhiteplaceholder" },
+    { pattern = "(?i)toonshading", asset = "toonshading" },
+    { pattern = "(?i)outlinetonemap", asset = "outlinetonemap" },
+]
+
+[fixes]
+
+[fixes.file_ref_migration]
+name = "Asset Reference Type Migration"
+description = "Riot migrated asset-path fields from string to xxh64 'file' references; string-typed fields no longer load. Converts strings on the migrated (class, field) pairs to file hashes and records hash->path pairs in the BIN trailer. Runs after repath so repathed paths are the ones hashed."
+severity = "critical"
+phase = "post_repath"
+
+[fixes.file_ref_migration.detect]
+type = "class_field_is_string"
+targets = [
+    { class = "AnimationResourceData", field = "mAnimationFilePath" },
+    { class = "CensoredImage", field = "image" },
+    { class = "SkinCharacterDataProperties", field = "iconCircle" },
+    { class = "SkinCharacterDataProperties", field = "iconSquare" },
+    { class = "SkinMeshDataProperties", field = "texture" },
+    { class = "StaticMaterialShaderSamplerDef", field = "texturePath" },
+]
+
+[fixes.file_ref_migration.apply]
+type = "retype_string_to_file"
+targets = [
+    { class = "AnimationResourceData", field = "mAnimationFilePath" },
+    { class = "CensoredImage", field = "image" },
+    { class = "SkinCharacterDataProperties", field = "iconCircle" },
+    { class = "SkinCharacterDataProperties", field = "iconSquare" },
+    { class = "SkinMeshDataProperties", field = "texture" },
+    { class = "StaticMaterialShaderSamplerDef", field = "texturePath" },
+]
+
+[fixes.merge_linked_bins]
+name = "Merge Linked BINs"
+description = "Recursively merges linked dependency BINs (spells, animation, etc.) into parent character BINs, removing the separate dependency files from the WAD."
+severity = "high"
+
+[fixes.merge_linked_bins.detect]
+type = "entry_type_exists_any"
+entry_types = ["SkinCharacterDataProperties"]
+
+[fixes.merge_linked_bins.apply]
+type = "merge_linked_bins"
+
+[fixes.healthbar_fix]
+name = "Missing HP Bar"
+description = "Adds UnitHealthBarStyle field to fix invisible health bars"
+severity = "high"
+
+[fixes.healthbar_fix.detect]
+type = "missing_or_wrong_field"
+entry_type = "SkinCharacterDataProperties"
+embed_path = "HealthBarData"
+embed_type = "CharacterHealthBarDataRecord"
+field = "UnitHealthBarStyle"
+expected_value = 12
+
+[fixes.healthbar_fix.apply]
+type = "ensure_field"
+field = "UnitHealthBarStyle"
+value = 12
+data_type = "u8"
+
+[fixes.healthbar_fix.apply.create_parent]
+field = "HealthBarData"
+type = "CharacterHealthBarDataRecord"
+
+[fixes.staticmat_texturepath]
+name = "White Model (TextureName)"
+description = "Renames TextureName to TexturePath in material definitions"
+severity = "critical"
+
+[fixes.staticmat_texturepath.detect]
+type = "field_hash_exists"
+entry_type = "StaticMaterialDef"
+path = "SamplerValues.*.TextureName"
+
+[fixes.staticmat_texturepath.apply]
+type = "rename_hash"
+from_hash = "TextureName"
+to_hash = "TexturePath"
+
+[fixes.staticmat_samplername]
+name = "White Model (SamplerName)"
+description = "Renames SamplerName to TextureName in material definitions"
+severity = "critical"
+
+[fixes.staticmat_samplername.detect]
+type = "field_hash_exists"
+entry_type = "StaticMaterialDef"
+path = "SamplerValues.*.SamplerName"
+
+[fixes.staticmat_samplername.apply]
+type = "rename_hash"
+from_hash = "SamplerName"
+to_hash = "TextureName"
+
+[fixes.black_icons]
+name = "Black/Missing Icons"
+description = "Converts .dds icon references to .tex when file not in WAD"
+severity = "medium"
+
+[fixes.black_icons.detect]
+type = "string_extension_not_in_wad"
+entry_type = "SkinCharacterDataProperties"
+extension = ".dds"
+fields = ["iconAvatar", "iconCircle", "iconSquare"]
+
+[fixes.black_icons.apply]
+type = "replace_string_extension"
+from = ".dds"
+to = ".tex"
+
+[fixes.dds_to_tex]
+name = "Broken Particle Effects"
+description = "Converts all .dds texture references to .tex when file not in WAD"
+severity = "high"
+
+[fixes.dds_to_tex.detect]
+type = "recursive_string_extension_not_in_wad"
+extension = ".dds"
+path_prefixes = [
+    "assets/characters/",
+    "assets/shared/materials/",
+    "assets/shared/particles/",
+    "assets/particles/",
+]
+
+[fixes.dds_to_tex.apply]
+type = "replace_string_extension"
+from = ".dds"
+to = ".tex"
+path_prefixes = [
+    "assets/characters/",
+    "assets/shared/materials/",
+    "assets/shared/particles/",
+    "assets/particles/",
+]
+
+[fixes.champion_bin_remover]
+name = "Champion Bin Files"
+description = "Removes champion data files that break mods after patches"
+severity = "high"
+
+[fixes.champion_bin_remover.detect]
+type = "entry_type_exists_any"
+entry_types = [
+    "SpellObject",
+    "StatStoneData",
+    "SkinCharacterMetaDataProperties",
+    "CharacterRecord",
+    "ChampionRuneRecommendationsContext",
+    "RecSpellRankUpInfoList",
+    "ItemRecommendationOverrideSet",
+    "ItemRecommendationContextList",
+    "StatStoneSet",
+    "AbilityObject",
+]
+
+[fixes.champion_bin_remover.apply]
+type = "remove_from_wad"
+
+[fixes.vfx_shape_fix]
+name = "VFX Shape Fix"
+description = "Fixes VFX particle shapes that broke after patch 14.1"
+severity = "medium"
+
+[fixes.vfx_shape_fix.detect]
+type = "vfx_shape_needs_fix"
+entry_type = "VfxSystemDefinitionData"
+
+[fixes.vfx_shape_fix.apply]
+type = "vfx_shape_fix"
+
+[fixes.shader_fallback]
+name = "Invalid Shader Fix"
+description = "Replaces invalid shader references with closest valid match using token similarity"
+severity = "critical"
+
+[fixes.shader_fallback.detect]
+type = "invalid_shader_reference"
+shader_def_type = "CustomShaderDef"
+shader_link_field = "shaderLink"
+
+[fixes.shader_fallback.apply]
+type = "shader_fallback"
+shader_def_type = "CustomShaderDef"
+shader_link_field = "shaderLink"
+
+[fixes.entry_validator]
+name = "Unreferenced Entry Cleanup"
+description = "Removes ContextualActionData, AnimationGraphData, and GearSkinUpgrade entries not referenced by main skin entry"
+severity = "high"
+
+[fixes.entry_validator.detect]
+type = "unreferenced_entry_of_type"
+main_entry_type = "SkinCharacterDataProperties"
+targets = [
+    { entry_type = "ContextualActionData", type_hash = "0xCF3A2F44", reference_field = "contextualActionData", link_field = "0xd8f64a0d" },
+    { entry_type = "AnimationGraphData", type_hash = "0xF5F9B3E7", reference_field = "animationGraphData", link_field = "0xf5fb07c7" },
+    { entry_type = "GearSkinUpgrade", type_hash = "0x27E0C761", reference_field = "materialOverrides", link_field = "0xcb522723" },
+]
+
+[fixes.entry_validator.apply]
+type = "remove_unreferenced_entries"
+main_entry_type = "SkinCharacterDataProperties"
+targets = [
+    { entry_type = "ContextualActionData", type_hash = "0xCF3A2F44", reference_field = "contextualActionData", link_field = "0xd8f64a0d" },
+    { entry_type = "AnimationGraphData", type_hash = "0xF5F9B3E7", reference_field = "animationGraphData", link_field = "0xf5fb07c7" },
+    { entry_type = "GearSkinUpgrade", type_hash = "0x27E0C761", reference_field = "materialOverrides", link_field = "0xcb522723" },
+]
+
+[fixes.gear_pull]
+name = "Dead Gear Link Repair"
+description = "Pulls GearSkinUpgrade entries referenced by mGearSkinUpgrades but missing from the mod out of the live game BIN closure (confirmed crash otherwise). Nukes skinUpgradeData as last resort."
+severity = "critical"
+
+[fixes.gear_pull.detect]
+type = "dead_entry_link"
+main_entry_type = "SkinCharacterDataProperties"
+targets = [
+    { entry_type = "GearSkinUpgrade", type_hash = "0x27E0C761", reference_field = "skinUpgradeData", link_field = "0xcb522723" },
+]
+
+[fixes.gear_pull.apply]
+type = "pull_entries_from_game"
+main_entry_type = "SkinCharacterDataProperties"
+nuke_fallback_field = "skinUpgradeData"
+targets = [
+    { entry_type = "GearSkinUpgrade", type_hash = "0x27E0C761", reference_field = "skinUpgradeData", link_field = "0xcb522723" },
+]
+
+[fixes.cac_pull]
+name = "Voiceover (CAC) Restore"
+description = "Pulls ContextualActionData entries referenced by the skin but missing from the mod out of the live game BIN closure, restoring voiceovers. Unpullable links are dropped."
+severity = "medium"
+
+[fixes.cac_pull.detect]
+type = "dead_entry_link"
+main_entry_type = "SkinCharacterDataProperties"
+targets = [
+    { entry_type = "ContextualActionData", type_hash = "0xCF3A2F44", reference_field = "contextualActionData", link_field = "0xd8f64a0d" },
+]
+
+[fixes.cac_pull.apply]
+type = "pull_entries_from_game"
+main_entry_type = "SkinCharacterDataProperties"
+targets = [
+    { entry_type = "ContextualActionData", type_hash = "0xCF3A2F44", reference_field = "contextualActionData", link_field = "0xd8f64a0d" },
+]
+
+[fixes.resolve_dead_refs]
+name = "Dead Reference Ladder"
+description = "Rewrites dead asset references to a live form using the installed game as ground truth: .dds↔.tex / .sco↔.scb twins and Riot's inner-suffix-stripped renames. Skips anything the mod or game actually ships. Detection uses the .dds extension scan as a cheap trigger (misses pure-.anm-only cases); the transform then re-checks and fixes all extensions in the BIN, so this is a safe no-op when nothing is dead."
+severity = "high"
+
+[fixes.resolve_dead_refs.detect]
+type = "recursive_string_extension_not_in_wad"
+extension = ".dds"
+path_prefixes = []
+
+[fixes.resolve_dead_refs.apply]
+type = "resolve_dead_refs"
+extensions = ["dds", "tex", "anm", "skn", "skl", "scb", "sco"]
+
+[fixes.vfx_entry_split]
+name = "VFX Entry Separation"
+description = "Extracts every VfxSystemDefinitionData entry into a sibling BIN at {champion}_vfx_skin{skin}.bin and links it from the source. Reduces skin0.bin bloat and matches the layout Riot ships natively. Disabled by default until validated on real mods."
+severity = "low"
+
+[fixes.vfx_entry_split.detect]
+type = "entry_type_exists_any"
+entry_types = ["VfxSystemDefinitionData"]
+
+[fixes.vfx_entry_split.apply]
+type = "split_entries_by_type"
+output_path_template = "data/characters/{champion}/skins/{champion}_vfx_skin{skin}.bin"
+link_in_source = true
+entry_types = ["VfxSystemDefinitionData"]
+
+[fixes.hud_icon_dds_to_tex]
+name = "HUD icon .dds → .tex (field-scoped)"
+description = "Rewrite .dds → .tex only on iconCircle / iconSquare / iconAvatar fields. Game expects .tex for HUD icons; this leaves non-HUD .dds refs untouched."
+severity = "medium"
+
+[fixes.hud_icon_dds_to_tex.detect]
+type = "recursive_string_extension_not_in_wad"
+extension = ".dds"
+path_prefixes = ["assets/characters/"]
+
+[fixes.hud_icon_dds_to_tex.apply]
+type = "replace_string_extension"
+from = ".dds"
+to = ".tex"
+field_filter = "(?i)icon(circle|square|avatar)"
+path_prefixes = ["assets/characters/"]
+
+[wad_fixes]
+
+[wad_fixes.bnk_remover]
+name = "Broken Sound Files"
+description = "Removes BNK audio files with outdated Wwise versions (only v145+ is valid)"
+severity = "low"
+
+[wad_fixes.bnk_remover.detect]
+type = "file_extension"
+extension = ".bnk"
+
+[wad_fixes.bnk_remover.detect.binary_check]
+type = "version_at_offset"
+offset = 8
+size = 4
+endian = "little"
+allowed_versions = [145]
+
+[wad_fixes.bnk_remover.apply]
+type = "remove_file"
+
+[wad_fixes.dds_texture_converter]
+name = "DDS → TEX Texture Conversion"
+description = "Converts DDS textures to League's TEX format (fixes broken textures in newer patches)"
+severity = "medium"
+
+[wad_fixes.dds_texture_converter.detect]
+type = "file_extension"
+extension = ".dds"
+
+[wad_fixes.dds_texture_converter.apply]
+type = "convert_format"
+from_ext = "dds"
+to_ext = "tex"
+converter = "dds_to_tex"
+
+[wad_fixes.sco_mesh_converter]
+name = "SCO → SCB Mesh Conversion"
+description = "Converts ASCII SCO meshes to binary SCB format (required by newer League versions)"
+severity = "high"
+
+[wad_fixes.sco_mesh_converter.detect]
+type = "file_extension"
+extension = ".sco"
+
+[wad_fixes.sco_mesh_converter.apply]
+type = "convert_format"
+from_ext = "sco"
+to_ext = "scb"
+converter = "sco_to_scb"
+
+[wad_fixes.anm_remover]
+name = "Animation File Remover"
+description = "Removes .anm animation files to prevent conflicts with newer patches"
+severity = "low"
+
+[wad_fixes.anm_remover.detect]
+type = "file_extension"
+extension = ".anm"
+
+[wad_fixes.anm_remover.apply]
+type = "remove_file"
+
+[wad_fixes.strip_mipmaps_tex]
+name = "Strip Mipmaps (TEX)"
+description = "Drops the mip chain from TEX textures. Workaround for the post-2026 League regression where mipmapped textures stop rendering. Disabled by default — opt in per-run if the mod ships affected textures."
+severity = "low"
+
+[wad_fixes.strip_mipmaps_tex.detect]
+type = "file_extension"
+extension = ".tex"
+
+[wad_fixes.strip_mipmaps_tex.apply]
+type = "transform_bytes"
+converter = "strip_mipmaps"
+
+[wad_fixes.strip_mipmaps_dds]
+name = "Strip Mipmaps (DDS)"
+description = "Drops the mip chain from DDS textures. Pairs with strip_mipmaps_tex."
+severity = "low"
+
+[wad_fixes.strip_mipmaps_dds.detect]
+type = "file_extension"
+extension = ".dds"
+
+[wad_fixes.strip_mipmaps_dds.apply]
+type = "transform_bytes"
+converter = "strip_mipmaps"
+
+[wad_fixes.fix_tex_dimensions]
+name = "TEX Dimension Fix"
+description = "Rounds non-block-aligned TEX dimensions down to the nearest multiple of 4 and crops the pixel data. Prevents the noise/crash you get on BC1/BC3 textures with odd dimensions."
+severity = "high"
+
+[wad_fixes.fix_tex_dimensions.detect]
+type = "file_extension"
+extension = ".tex"
+
+[wad_fixes.fix_tex_dimensions.apply]
+type = "transform_bytes"
+converter = "fix_tex_dims"
+
+[wad_fixes.inject_invis_tex_placeholder]
+name = "Inject Default Invisible Texture"
+description = "Always-present invisible 1×1 .tex at the placeholder path. Other fixes can point repathed missing textures at this single asset instead of injecting per-path duplicates."
+severity = "low"
+
+[wad_fixes.inject_invis_tex_placeholder.detect]
+type = "always"
+
+[wad_fixes.inject_invis_tex_placeholder.apply]
+type = "add_files"
+assets = [
+    { asset = "invis_tex", path = "assets/hematite/placeholders/invis.tex", only_if_missing = true },
+]
+
+[wad_fixes.combo_bin_relocate]
+name = "Legacy Combo-Bin Relocation"
+description = "Descriptor only — the actual re-key of legacy data/<champ>_skins_<slots>.bin entries to data/characters/<champ>/<champ>_multi_skins_<slots>.bin runs as a dedicated CLI pipeline step (crates/hematite-cli/src/combo_relocate.rs) gated on this fix id, not through this rule's detect/apply. This entry exists only so the fix id resolves in config for reporting/--check and the ALL_FIX_IDS guard test. The rename pattern below intentionally never matches (^$ matches only the empty string), so it is a guaranteed no-op if the WAD pipeline ever evaluates it directly."
+severity = "low"
+
+[wad_fixes.combo_bin_relocate.detect]
+type = "file_pattern"
+pattern = "data/*_skins_*.bin"
+
+[wad_fixes.combo_bin_relocate.apply]
+type = "rename_file"
+pattern = "^$"
+replacement = ""
+

@@ -38,7 +38,7 @@ pub fn list_fixes(config: &FixConfig) -> Vec<FixInfo> {
             name: rule.name.clone(),
             description: rule.description.clone(),
             severity: rule.severity.clone(),
-            enabled: rule.enabled,
+            enabled: config.is_fix_enabled(id),
             wad_level: false,
         });
     }
@@ -49,7 +49,7 @@ pub fn list_fixes(config: &FixConfig) -> Vec<FixInfo> {
             name: rule.name.clone(),
             description: rule.description.clone(),
             severity: rule.severity.clone(),
-            enabled: rule.enabled,
+            enabled: config.is_fix_enabled(id),
             wad_level: true,
         });
     }
@@ -66,10 +66,10 @@ mod tests {
         // Load the repo's embedded config the same way the CLI test does.
         let raw = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../config/fix_config.json"
+            "/../../config/fix_config.toml"
         ))
         .unwrap();
-        let config: hematite_types::config::FixConfig = serde_json::from_str(&raw).unwrap();
+        let config: hematite_types::config::FixConfig = toml::from_str(&raw).unwrap();
         let infos = list_fixes(&config);
         assert!(!infos.is_empty());
         for i in &infos {

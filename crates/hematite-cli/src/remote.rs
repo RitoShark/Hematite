@@ -1,6 +1,6 @@
 //! Remote configuration fetching from GitHub.
 //!
-//! Fetches fix_config.json and champion_list.json from the Hematite repository,
+//! Fetches fix_config.toml and champion_list.json from the Hematite repository,
 //! caches them locally, and provides fallback to embedded configs.
 
 use anyhow::{Context, Result};
@@ -14,8 +14,25 @@ use std::time::{Duration, SystemTime};
 const GITHUB_RAW_BASE: &str = "https://raw.githubusercontent.com/RitoShark/Hematite/main/config";
 
 /// URLs for remote configs
-const FIX_CONFIG_URL: &str = const_format::formatcp!("{}/fix_config.json", GITHUB_RAW_BASE);
+const FIX_CONFIG_URL: &str = const_format::formatcp!("{}/fix_config.toml", GITHUB_RAW_BASE);
 const CHAMPION_LIST_URL: &str = const_format::formatcp!("{}/champion_list.json", GITHUB_RAW_BASE);
+
+/// Parse a fix config from either format — TOML (authored) first, JSON
+/// (legacy remote configs, old cache files, hand-fed configs) as fallback.
+fn parse_fix_config(content: &str) -> Option<FixConfig> {
+    match toml::from_str::<FixConfig>(content) {
+        Ok(config) => Some(config),
+        Err(toml_err) => match serde_json::from_str::<FixConfig>(content) {
+            Ok(config) => Some(config),
+            Err(json_err) => {
+                tracing::warn!(
+                    "Fix config parses as neither TOML ({toml_err}) nor JSON ({json_err})"
+                );
+                None
+            }
+        },
+    }
+}
 
 /// Cache time-to-live: 1 hour
 const CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -149,14 +166,18 @@ fn load_fix_config_source() -> FixConfig {
         }
     };
 
-    let cache_file = cache_dir.join("fix_config.json");
+    let cache_file = cache_dir.join("fix_config.toml");
+    // Cache written by pre-TOML builds; still readable via the JSON fallback.
+    let legacy_cache_file = cache_dir.join("fix_config.json");
 
     // Try cached config first
-    if is_cache_valid(&cache_file) {
-        if let Ok(content) = fs::read_to_string(&cache_file) {
-            if let Ok(config) = serde_json::from_str::<FixConfig>(&content) {
-                tracing::debug!("Using cached fix config (version {})", config.version);
-                return config;
+    for cached in [&cache_file, &legacy_cache_file] {
+        if is_cache_valid(cached) {
+            if let Ok(content) = fs::read_to_string(cached) {
+                if let Some(config) = parse_fix_config(&content) {
+                    tracing::debug!("Using cached fix config (version {})", config.version);
+                    return config;
+                }
             }
         }
     }
@@ -165,8 +186,8 @@ fn load_fix_config_source() -> FixConfig {
     tracing::info!("Fetching latest fix config from GitHub...");
     match fetch_json(FIX_CONFIG_URL) {
         Ok(content) => {
-            match serde_json::from_str::<FixConfig>(&content) {
-                Ok(config) => {
+            match parse_fix_config(&content) {
+                Some(config) => {
                     tracing::info!("Fetched fix config version {} from GitHub", config.version);
 
                     // Cache the fetched config
@@ -180,8 +201,8 @@ fn load_fix_config_source() -> FixConfig {
 
                     return config;
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to parse fetched config: {e}");
+                None => {
+                    tracing::warn!("Failed to parse fetched config");
                 }
             }
         }
@@ -191,11 +212,13 @@ fn load_fix_config_source() -> FixConfig {
     }
 
     // Try stale cache as fallback
-    if cache_file.exists() {
-        if let Ok(content) = fs::read_to_string(&cache_file) {
-            if let Ok(config) = serde_json::from_str::<FixConfig>(&content) {
-                tracing::info!("Using stale cached config (version {})", config.version);
-                return config;
+    for cached in [&cache_file, &legacy_cache_file] {
+        if cached.exists() {
+            if let Ok(content) = fs::read_to_string(cached) {
+                if let Some(config) = parse_fix_config(&content) {
+                    tracing::info!("Using stale cached config (version {})", config.version);
+                    return config;
+                }
             }
         }
     }
@@ -276,10 +299,10 @@ pub fn load_champion_list() -> ChampionList {
 
 /// Load embedded fix config (compile-time bundled).
 fn load_embedded_fix_config() -> FixConfig {
-    const EMBEDDED_CONFIG: &str = include_str!("../../../config/fix_config.json");
+    const EMBEDDED_CONFIG: &str = include_str!("../../../config/fix_config.toml");
 
-    serde_json::from_str(EMBEDDED_CONFIG)
-        .expect("Embedded fix_config.json is invalid - this is a build error")
+    toml::from_str(EMBEDDED_CONFIG)
+        .expect("Embedded fix_config.toml is invalid - this is a build error")
 }
 
 /// Load embedded champion list (compile-time bundled).
@@ -318,12 +341,14 @@ pub struct CacheStatus {
 #[allow(dead_code)]
 pub fn get_cache_status() -> Result<CacheStatus> {
     let cache_dir = get_cache_dir()?;
-    let fix_config_cache = cache_dir.join("fix_config.json");
+    let fix_config_cache = cache_dir.join("fix_config.toml");
+    let legacy_fix_config_cache = cache_dir.join("fix_config.json");
     let champion_list_cache = cache_dir.join("champion_list.json");
 
     Ok(CacheStatus {
-        fix_config_cached: fix_config_cache.exists(),
-        fix_config_valid: is_cache_valid(&fix_config_cache),
+        fix_config_cached: fix_config_cache.exists() || legacy_fix_config_cache.exists(),
+        fix_config_valid: is_cache_valid(&fix_config_cache)
+            || is_cache_valid(&legacy_fix_config_cache),
         champion_list_cached: champion_list_cache.exists(),
         champion_list_valid: is_cache_valid(&champion_list_cache),
     })
@@ -352,6 +377,37 @@ mod tests {
     fn version_newer_garbage_segments_compare_as_zero() {
         assert!(version_newer("2.2.0", "2.x.9"));
         assert!(!version_newer("abc", "0.0.1"));
+    }
+
+    #[test]
+    fn parse_fix_config_accepts_both_toml_and_json() {
+        let embedded_toml = include_str!("../../../config/fix_config.toml");
+        let from_toml = parse_fix_config(embedded_toml).expect("TOML config must parse");
+
+        let json = serde_json::to_string(&from_toml).expect("serialize to JSON");
+        let from_json = parse_fix_config(&json).expect("JSON config must parse");
+
+        assert_eq!(
+            serde_json::to_value(&from_toml).unwrap(),
+            serde_json::to_value(&from_json).unwrap(),
+            "TOML and JSON forms must deserialize identically"
+        );
+        assert!(from_toml.fixes.contains_key("file_ref_migration"));
+    }
+
+    #[test]
+    fn enabled_list_governs_when_present_rule_flags_when_absent() {
+        let embedded = load_embedded_fix_config();
+        assert!(embedded.enabled_fixes.is_some());
+        assert!(embedded.is_fix_enabled("healthbar_fix"));
+        assert!(!embedded.is_fix_enabled("vfx_entry_split"));
+
+        let mut legacy = embedded.clone();
+        legacy.enabled_fixes = None;
+        assert!(legacy.is_fix_enabled("healthbar_fix"));
+        // With no list, per-rule flags govern; the repo TOML omits them so
+        // they default to true.
+        assert!(legacy.is_fix_enabled("vfx_entry_split"));
     }
 
     #[test]
