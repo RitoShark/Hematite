@@ -196,10 +196,15 @@ pub enum DetectionRule {
     /// nowhere: not in this tree, not in mod-shipped linked trees, and not in
     /// any game-resolvable `linked:` BIN. The lethal inverse of
     /// `UnreferencedEntryOfType` (e.g. dead GearSkinUpgrade links crash).
+    /// With `require_pullable`, only fires when the game's BIN closure can
+    /// actually supply a missing entry — unpullable links are left alone
+    /// (Topaz semantics: an unresolved CAC link is harmless at runtime).
     #[serde(rename = "dead_entry_link")]
     DeadEntryLink {
         main_entry_type: String,
         targets: Vec<EntryValidationTarget>,
+        #[serde(default)]
+        require_pullable: bool,
     },
 
     /// One of the targeted (class, field) pairs still holds a `string` value —

@@ -87,7 +87,8 @@ pub fn detect_issue(rule: &DetectionRule, ctx: &FixContext) -> bool {
         DetectionRule::DeadEntryLink {
             main_entry_type,
             targets,
-        } => detect_dead_entry_link(ctx, main_entry_type, targets),
+            require_pullable,
+        } => detect_dead_entry_link(ctx, main_entry_type, targets, *require_pullable),
 
         DetectionRule::ClassFieldIsString { targets } => {
             crate::transform::retype_file::detect(tree, targets)
@@ -103,6 +104,7 @@ fn detect_dead_entry_link(
     ctx: &FixContext,
     main_entry_type: &str,
     targets: &[EntryValidationTarget],
+    require_pullable: bool,
 ) -> bool {
     if !ctx.hashes.is_loaded() {
         return false;
@@ -111,7 +113,12 @@ fn detect_dead_entry_link(
         return false;
     }
 
-    !collect_dead_links(ctx, main_entry_type, targets).is_empty()
+    if require_pullable {
+        !crate::detect::dead_links::collect_pullable_dead_links(ctx, main_entry_type, targets)
+            .is_empty()
+    } else {
+        !collect_dead_links(ctx, main_entry_type, targets).is_empty()
+    }
 }
 
 fn detect_missing_or_wrong_field(
@@ -779,6 +786,7 @@ mod tests {
                 reference_field: "skinUpgradeData".to_string(),
                 link_field: "0xcb522723".to_string(),
             }],
+            require_pullable: false,
         };
 
         let mut ctx = test_ctx(tree, &hashes, &wad, &champions);
@@ -829,6 +837,7 @@ mod tests {
                 reference_field: "skinUpgradeData".to_string(),
                 link_field: "0xcb522723".to_string(),
             }],
+            require_pullable: false,
         };
 
         let ctx = test_ctx(tree, &hashes, &wad, &champions); // ctx.game == None

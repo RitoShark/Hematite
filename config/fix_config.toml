@@ -1,4 +1,4 @@
-version = "2.3.2"
+version = "2.3.3"
 last_updated = "2026-08-22"
 
 enabled_fixes = [
@@ -269,12 +269,13 @@ targets = [
 
 [fixes.cac_pull]
 name = "Voiceover (CAC) Restore"
-description = "Pulls ContextualActionData entries referenced by the skin but missing from the mod out of the live game BIN closure, restoring voiceovers. Unpullable links are dropped."
+description = "Pulls ContextualActionData entries referenced by the skin but missing from the mod out of the live game BIN closure, restoring voiceovers. Unpullable links are kept — the game resolves or ignores them at runtime."
 severity = "medium"
 
 [fixes.cac_pull.detect]
 type = "dead_entry_link"
 main_entry_type = "SkinCharacterDataProperties"
+require_pullable = true
 targets = [
     { entry_type = "ContextualActionData", type_hash = "0xCF3A2F44", reference_field = "contextualActionData", link_field = "0xd8f64a0d" },
 ]

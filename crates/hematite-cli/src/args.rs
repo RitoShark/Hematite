@@ -414,7 +414,7 @@ mod tests {
 
         let config = load_repo_config();
 
-        assert_eq!(config.version, "2.3.2");
+        assert_eq!(config.version, "2.3.3");
 
         // The central enable list is the single authority — spot-check both
         // directions plus a WAD-level entry.
@@ -478,6 +478,7 @@ mod tests {
             DetectionRule::DeadEntryLink {
                 main_entry_type,
                 targets,
+                ..
             } => {
                 assert_eq!(main_entry_type, "SkinCharacterDataProperties");
                 assert_eq!(targets.len(), 1);
@@ -508,9 +509,17 @@ mod tests {
         assert!(config.is_fix_enabled("cac_pull"));
         assert_eq!(cac_pull.severity, "medium");
         match &cac_pull.detect {
-            DetectionRule::DeadEntryLink { targets, .. } => {
+            DetectionRule::DeadEntryLink {
+                targets,
+                require_pullable,
+                ..
+            } => {
                 assert_eq!(targets.len(), 1);
                 assert_eq!(targets[0].entry_type, "ContextualActionData");
+                assert!(
+                    require_pullable,
+                    "cac_pull must only fire when the game closure can supply the entry"
+                );
             }
             other => panic!("cac_pull.detect: expected DeadEntryLink, got {other:?}"),
         }

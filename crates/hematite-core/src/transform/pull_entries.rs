@@ -9,98 +9,17 @@
 //!
 //! Links that can't be pulled either nuke a configured fallback field on
 //! the main entry (gear: drop `skinUpgradeData` so the client stops trying
-//! to resolve the missing upgrade) or, absent a fallback field, simply drop
-//! the dead `Link` value from whatever container held it (CAC-shaped).
+//! to resolve the missing upgrade) or, absent a fallback field, are KEPT
+//! untouched (CAC-shaped; Topaz semantics — the game resolves or ignores
+//! them at runtime, and deleting them killed voiceovers).
 
 use crate::context::FixContext;
-use crate::detect::dead_links::collect_dead_links;
+use crate::detect::dead_links::{
+    build_game_closure, closure_object_matches_target, collect_dead_links,
+};
 use crate::filter;
-use crate::seeds;
-use hematite_types::bin::{BinObject, PropertyValue};
+use hematite_types::bin::PropertyValue;
 use hematite_types::config::EntryValidationTarget;
-use std::collections::{HashMap, HashSet};
-
-/// Hard cap on the number of game BINs visited while building the closure.
-/// Prevents runaway BFS on pathological/cyclic `linked:` graphs.
-const CLOSURE_CAP: usize = 64;
-
-/// Parse a hex hash string like `"0xcb522723"` (or without the `0x` prefix)
-/// into a `u32`.
-fn parse_hex_hash(hex: &str) -> Option<u32> {
-    let hex = hex.trim_start_matches("0x").trim_start_matches("0X");
-    u32::from_str_radix(hex, 16).ok()
-}
-
-/// Resolve a target's class hash: prefer the explicit `type_hash` hex
-/// string, fall back to resolving `entry_type` through the hash dictionary.
-fn resolve_target_class_hash(ctx: &FixContext, target: &EntryValidationTarget) -> Option<u32> {
-    if let Some(hex) = &target.type_hash {
-        if let Some(h) = parse_hex_hash(hex) {
-            return Some(h);
-        }
-    }
-    ctx.hashes.type_hash(&target.entry_type).map(|h| h.0)
-}
-
-/// Build the live game's BIN closure reachable from this fix session:
-/// seed bin paths (from `seeds::discover_seeds`) plus every path already in
-/// `ctx.tree.linked`, then BFS through each fetched tree's own `.linked`.
-/// Returns a map of path_hash -> BinObject for every object seen, capped at
-/// `CLOSURE_CAP` visited bins.
-fn build_game_closure(
-    ctx: &FixContext,
-    game: &dyn crate::traits::GameProvider,
-) -> HashMap<u32, BinObject> {
-    let mut closure: HashMap<u32, BinObject> = HashMap::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
-
-    for seed in seeds::discover_seeds([ctx.file_path.as_str()]) {
-        queue.push_back(seed.bin_path());
-    }
-    for linked in &ctx.tree.linked {
-        queue.push_back(linked.clone());
-    }
-
-    while let Some(path) = queue.pop_front() {
-        if seen.len() >= CLOSURE_CAP {
-            break;
-        }
-        if !seen.insert(path.clone()) {
-            continue;
-        }
-
-        let Some(tree) = game.game_bin(&path) else {
-            continue;
-        };
-
-        for (&hash, obj) in &tree.objects {
-            closure.entry(hash).or_insert_with(|| obj.clone());
-        }
-        for linked in &tree.linked {
-            if !seen.contains(linked) {
-                queue.push_back(linked.clone());
-            }
-        }
-    }
-
-    closure
-}
-
-/// Whether a closure object satisfies a dead link's target: the target's
-/// class hash (resolved via hex or dictionary) matches the object's
-/// `class_hash`, or the target's class hash couldn't be resolved at all (in
-/// which case we accept on hash match alone).
-fn closure_object_matches_target(
-    ctx: &FixContext,
-    target: &EntryValidationTarget,
-    obj: &BinObject,
-) -> bool {
-    match resolve_target_class_hash(ctx, target) {
-        Some(expected) => obj.class_hash.0 == expected,
-        None => true,
-    }
-}
 
 /// Remove `field_hash` from a property map, recursing one level into
 /// Struct/Embedded values when not found at the top level. Returns true if
@@ -125,125 +44,12 @@ fn remove_field_one_level(
     false
 }
 
-/// Drop dead `Link` values from properties whose `name_hash` equals
-/// `link_field_hash`, mirroring how `collect_dead_links` locates the link
-/// field: match at the current level first, otherwise keep searching for
-/// the field inside nested Struct/Embedded/Container/Optional/Map values
-/// (the link field may sit under an intermediate embed). Returns the
-/// number of values dropped.
-fn drop_dead_links_for_field(
-    properties: &mut indexmap::IndexMap<u32, hematite_types::bin::BinProperty>,
-    link_field_hash: u32,
-    dead: &HashSet<u32>,
-) -> u32 {
-    let mut count = 0;
-    // A bare `Link` value can't be dropped in place — the whole property
-    // goes, or detection (which counts bare links) re-fires forever.
-    let mut remove_keys: Vec<u32> = Vec::new();
-    for (key, prop) in properties.iter_mut() {
-        if prop.name_hash.0 == link_field_hash {
-            if matches!(&prop.value, PropertyValue::Link(h) if dead.contains(h)) {
-                remove_keys.push(*key);
-                continue;
-            }
-            count += drop_dead_links_from_value(&mut prop.value, dead);
-        } else {
-            count += drop_nested_for_field(&mut prop.value, link_field_hash, dead);
-        }
-    }
-    for key in remove_keys {
-        if properties.shift_remove(&key).is_some() {
-            count += 1;
-        }
-    }
-    count
-}
-
-/// Descend into a value looking for properties matching `link_field_hash`,
-/// without assuming the current value itself is the target field. The
-/// mutable twin of `dead_links::search_nested_for_field`.
-fn drop_nested_for_field(
-    value: &mut PropertyValue,
-    link_field_hash: u32,
-    dead: &HashSet<u32>,
-) -> u32 {
-    match value {
-        PropertyValue::Struct(s) | PropertyValue::Embedded(s) => {
-            drop_dead_links_for_field(&mut s.properties, link_field_hash, dead)
-        }
-        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
-            let mut count = 0;
-            for item in items.iter_mut() {
-                count += drop_nested_for_field(item, link_field_hash, dead);
-            }
-            count
-        }
-        PropertyValue::Optional(boxed) => {
-            if let Some(inner) = &mut **boxed {
-                drop_nested_for_field(inner, link_field_hash, dead)
-            } else {
-                0
-            }
-        }
-        PropertyValue::Map(entries) => {
-            let mut count = 0;
-            for (_, v) in entries.iter_mut() {
-                count += drop_nested_for_field(v, link_field_hash, dead);
-            }
-            count
-        }
-        _ => 0,
-    }
-}
-
-/// Recursively drop any `PropertyValue::Link(hash)` matching a hash in
-/// `dead` from containers/structs/optionals/maps. Only ever called on
-/// values already scoped under the target's `link_field` (see
-/// [`drop_dead_links_for_field`]). Returns the number of values dropped.
-fn drop_dead_links_from_value(value: &mut PropertyValue, dead: &HashSet<u32>) -> u32 {
-    match value {
-        PropertyValue::Struct(s) | PropertyValue::Embedded(s) => {
-            let mut count = 0;
-            for prop in s.properties.values_mut() {
-                count += drop_dead_links_from_value(&mut prop.value, dead);
-            }
-            count
-        }
-        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
-            let before = items.len();
-            items.retain(|item| !matches!(item, PropertyValue::Link(h) if dead.contains(h)));
-            let mut count = (before - items.len()) as u32;
-            for item in items.iter_mut() {
-                count += drop_dead_links_from_value(item, dead);
-            }
-            count
-        }
-        PropertyValue::Optional(boxed) => {
-            if let Some(inner) = &mut **boxed {
-                if matches!(inner, PropertyValue::Link(h) if dead.contains(h)) {
-                    **boxed = None;
-                    return 1;
-                }
-                return drop_dead_links_from_value(inner, dead);
-            }
-            0
-        }
-        PropertyValue::Map(entries) => {
-            let mut count = 0;
-            for (_, v) in entries.iter_mut() {
-                count += drop_dead_links_from_value(v, dead);
-            }
-            count
-        }
-        _ => 0,
-    }
-}
-
 /// Pull referenced-but-missing target entries out of the live game's BIN
-/// closure and inject them into `ctx.tree`. Unpullable links either nuke
-/// `nuke_fallback_field` on the main entry or drop the dead link value.
+/// closure and inject them into `ctx.tree`. Unpullable links nuke
+/// `nuke_fallback_field` on the main entry when one is configured;
+/// otherwise they are kept untouched.
 ///
-/// Returns the number of changes applied (pulls + nukes/drops).
+/// Returns the number of changes applied (pulls + nukes).
 pub fn apply(
     ctx: &mut FixContext<'_>,
     main_entry_type: &str,
@@ -310,36 +116,16 @@ pub fn apply(
         return count;
     }
 
-    // Group unpulled hashes by target so the drop walk stays scoped to the
-    // container(s) under each target's own link_field — an unscoped sweep
-    // could remove an unrelated Link elsewhere on the object whose u32
-    // value happens to collide with a dead hash from a different field.
-    let mut dead_by_target: HashMap<usize, HashSet<u32>> = HashMap::new();
+    // No fallback field: unpullable links are KEPT, matching Topaz — the
+    // game resolves them through always-loaded BINs (champion bin,
+    // multi_skins combo bin) or silently ignores them. Deleting them killed
+    // voiceovers on hand-fixed mods.
     for (target_idx, hash) in unpulled {
-        dead_by_target.entry(target_idx).or_default().insert(hash);
-    }
-
-    let main_keys = filter::object_keys_by_type(&ctx.tree, main_type_hash);
-    for (target_idx, dead_set) in &dead_by_target {
-        let target = &targets[*target_idx];
-        let Some(link_field_hash) = parse_hex_hash(&target.link_field) else {
-            continue;
-        };
-        for key in &main_keys {
-            if let Some(obj) = ctx.tree.objects.get_mut(key) {
-                let dropped =
-                    drop_dead_links_for_field(&mut obj.properties, link_field_hash, dead_set);
-                if dropped > 0 {
-                    tracing::info!(
-                        "pull_entries_from_game: dropped {} dead {} link value(s) from main entry {:08x}",
-                        dropped,
-                        target.entry_type,
-                        key
-                    );
-                    count += dropped;
-                }
-            }
-        }
+        tracing::debug!(
+            "pull_entries_from_game: keeping unpullable {} link {:08x}",
+            targets[target_idx].entry_type,
+            hash
+        );
     }
 
     count
@@ -607,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn drops_dead_link_when_no_nuke_field() {
+    fn keeps_unpullable_link_when_no_nuke_field() {
         let hashes = MockHashProvider::new();
         let wad = MockWadProvider;
 
@@ -627,16 +413,15 @@ mod tests {
             None,
         );
 
-        assert!(count >= 1);
+        assert_eq!(count, 0, "unpullable links are kept, not dropped");
         let main_obj = &ctx.tree.objects[&0];
-        let prop = &main_obj.properties[&CAC_LINK_FIELD_HASH];
-        match &prop.value {
+        match &main_obj.properties[&CAC_LINK_FIELD_HASH].value {
             PropertyValue::Container(items) => {
                 assert!(
-                    !items
+                    items
                         .iter()
                         .any(|v| matches!(v, PropertyValue::Link(h) if *h == 0x3333_3333)),
-                    "dead link value should have been dropped from container"
+                    "unpullable link value must survive untouched"
                 );
             }
             other => panic!("expected Container, got {other:?}"),
@@ -644,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn drops_bare_link_property_when_unpullable() {
+    fn keeps_bare_link_property_when_unpullable() {
         let hashes = MockHashProvider::new();
         let wad = MockWadProvider;
 
@@ -679,79 +464,10 @@ mod tests {
             None,
         );
 
-        assert_eq!(count, 1, "bare dead Link must drop its whole property");
-        assert!(
-            !ctx.tree.objects[&0]
-                .properties
-                .contains_key(&CAC_LINK_FIELD_HASH),
-            "property holding the bare dead Link should have been removed"
-        );
-    }
-
-    #[test]
-    fn drop_walk_is_scoped_to_target_link_field() {
-        const UNRELATED_FIELD_HASH: u32 = 0xBBBB_0002;
-        const DEAD_HASH: u32 = 0x5555_5555;
-
-        let hashes = MockHashProvider::new();
-        let wad = MockWadProvider;
-
-        // Main object: dead Link under the CAC link_field AND a second,
-        // unrelated property whose Link has the SAME u32 value. Only the
-        // link_field container may lose the value.
-        let mut main_obj = make_cac_main_object(DEAD_HASH);
-        main_obj.properties.insert(
-            UNRELATED_FIELD_HASH,
-            BinProperty {
-                name_hash: FieldHash(UNRELATED_FIELD_HASH),
-                value: PropertyValue::Container(vec![PropertyValue::Link(DEAD_HASH)]),
-            },
-        );
-
-        let mut tree = BinTree::default();
-        tree.objects.insert(0, main_obj);
-
-        let file_path = "data/characters/x/skins/skin0.bin";
-        let mut ctx = base_ctx(tree, &hashes, &wad, file_path);
-
-        let empty_game = EmptyGameProvider;
-        ctx.game = Some(&empty_game);
-
-        let count = apply(
-            &mut ctx,
-            "SkinCharacterDataProperties",
-            &[cac_target()],
-            None,
-        );
-
-        assert_eq!(count, 1, "exactly one drop: only the link_field's value");
-
-        let main_obj = &ctx.tree.objects[&0];
-
-        // The target link_field container must no longer hold the dead value.
-        match &main_obj.properties[&CAC_LINK_FIELD_HASH].value {
-            PropertyValue::Container(items) => {
-                assert!(
-                    !items
-                        .iter()
-                        .any(|v| matches!(v, PropertyValue::Link(h) if *h == DEAD_HASH)),
-                    "dead link should be dropped from the target link_field"
-                );
-            }
-            other => panic!("expected Container, got {other:?}"),
-        }
-
-        // The unrelated property must be untouched despite the colliding value.
-        match &main_obj.properties[&UNRELATED_FIELD_HASH].value {
-            PropertyValue::Container(items) => {
-                assert!(
-                    items
-                        .iter()
-                        .any(|v| matches!(v, PropertyValue::Link(h) if *h == DEAD_HASH)),
-                    "unrelated property's Link must survive the scoped drop walk"
-                );
-            }
-            other => panic!("expected Container, got {other:?}"),
+        assert_eq!(count, 0);
+        match &ctx.tree.objects[&0].properties[&CAC_LINK_FIELD_HASH].value {
+            PropertyValue::Link(h) => assert_eq!(*h, 0x4444_4444),
+            other => panic!("bare Link must survive untouched, got {other:?}"),
         }
     }
 

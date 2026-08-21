@@ -23,6 +23,108 @@ fn parse_hex_hash(hex: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
+/// Hard cap on the number of game BINs visited while building the pull
+/// closure. Prevents runaway BFS on pathological/cyclic `linked:` graphs.
+const CLOSURE_CAP: usize = 64;
+
+/// Resolve a target's class hash: prefer the explicit `type_hash` hex
+/// string, fall back to resolving `entry_type` through the hash dictionary.
+fn resolve_target_class_hash(ctx: &FixContext, target: &EntryValidationTarget) -> Option<u32> {
+    if let Some(hex) = &target.type_hash {
+        if let Some(h) = parse_hex_hash(hex) {
+            return Some(h);
+        }
+    }
+    ctx.hashes.type_hash(&target.entry_type).map(|h| h.0)
+}
+
+/// Build the live game's BIN closure reachable from this fix session:
+/// seed bin paths (from `seeds::discover_seeds`) plus every path already in
+/// `ctx.tree.linked`, then BFS through each fetched tree's own `.linked`.
+/// Returns a map of path_hash -> BinObject for every object seen, capped at
+/// `CLOSURE_CAP` visited bins. Shared by the `pull_entries_from_game`
+/// transform and pullability-gated detection so both see the same world.
+pub(crate) fn build_game_closure(
+    ctx: &FixContext,
+    game: &dyn crate::traits::GameProvider,
+) -> HashMap<u32, hematite_types::bin::BinObject> {
+    let mut closure: HashMap<u32, hematite_types::bin::BinObject> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+
+    for seed in crate::seeds::discover_seeds([ctx.file_path.as_str()]) {
+        queue.push_back(seed.bin_path());
+    }
+    for linked in &ctx.tree.linked {
+        queue.push_back(linked.clone());
+    }
+
+    while let Some(path) = queue.pop_front() {
+        if seen.len() >= CLOSURE_CAP {
+            break;
+        }
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+
+        let Some(tree) = game.game_bin(&path) else {
+            continue;
+        };
+
+        for (&hash, obj) in &tree.objects {
+            closure.entry(hash).or_insert_with(|| obj.clone());
+        }
+        for linked in &tree.linked {
+            if !seen.contains(linked) {
+                queue.push_back(linked.clone());
+            }
+        }
+    }
+
+    closure
+}
+
+/// Whether a closure object satisfies a dead link's target: the target's
+/// class hash (resolved via hex or dictionary) matches the object's
+/// `class_hash`, or the target's class hash couldn't be resolved at all (in
+/// which case we accept on hash match alone).
+pub(crate) fn closure_object_matches_target(
+    ctx: &FixContext,
+    target: &EntryValidationTarget,
+    obj: &hematite_types::bin::BinObject,
+) -> bool {
+    match resolve_target_class_hash(ctx, target) {
+        Some(expected) => obj.class_hash.0 == expected,
+        None => true,
+    }
+}
+
+/// The dead links the game closure can actually supply (class-matched).
+/// `require_pullable` detection fires only on these — unpullable links are
+/// left in place, matching Topaz: the game either resolves them through
+/// always-loaded BINs or ignores them; deleting them killed voiceovers.
+pub(crate) fn collect_pullable_dead_links(
+    ctx: &FixContext,
+    main_entry_type: &str,
+    targets: &[EntryValidationTarget],
+) -> Vec<(usize, u32)> {
+    let dead = collect_dead_links(ctx, main_entry_type, targets);
+    if dead.is_empty() {
+        return dead;
+    }
+    let Some(game) = ctx.game else {
+        return Vec::new();
+    };
+    let closure = build_game_closure(ctx, game);
+    dead.into_iter()
+        .filter(|(target_idx, hash)| {
+            closure
+                .get(hash)
+                .is_some_and(|obj| closure_object_matches_target(ctx, &targets[*target_idx], obj))
+        })
+        .collect()
+}
+
 /// Bound on game BINs visited while building the defined set — mirrors the
 /// pull transform's `CLOSURE_CAP` so detect and apply see the same world.
 const GAME_CLOSURE_CAP: usize = 64;
@@ -522,6 +624,61 @@ mod tests {
         ctx2.game = Some(&game);
         let dead2 = collect_dead_links(&ctx2, "SkinCharacterDataProperties", &[gear_target()]);
         assert_eq!(dead2, vec![(0, 0x1234)]);
+    }
+
+    #[test]
+    fn pullable_gate_fires_only_when_closure_can_supply() {
+        let hashes = MockHashProvider::new();
+        let wad = MockWadProvider;
+
+        // Dead in the mod, but the GAME's version of the seed skin BIN
+        // (reachable only through the pull closure, not the defined set)
+        // supplies the entry → pullable.
+        let mut tree = BinTree::default();
+        tree.objects.insert(0, make_main_object(0x1234));
+
+        let mut game_skin_tree = BinTree::default();
+        game_skin_tree.objects.insert(
+            0x1234,
+            BinObject {
+                class_hash: TypeHash(0x27E0C761),
+                path_hash: PathHash(0x1234),
+                properties: IndexMap::new(),
+            },
+        );
+        let mut bins = HashMap::new();
+        bins.insert(
+            "data/characters/x/skins/skin0.bin".to_string(),
+            game_skin_tree,
+        );
+        let game = MapGameProvider { bins };
+
+        let mut ctx = base_ctx(tree, &hashes, &wad);
+        ctx.file_path = "data/characters/x/skins/skin0.bin".to_string();
+        ctx.game = Some(&game);
+
+        let pullable =
+            collect_pullable_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
+        assert_eq!(pullable, vec![(0, 0x1234)]);
+
+        // Same setup with an empty game: still dead, but nothing to pull →
+        // the gate stays silent (the link is kept, Topaz-style).
+        let mut tree2 = BinTree::default();
+        tree2.objects.insert(0, make_main_object(0x1234));
+        let empty_game = EmptyGameProvider;
+        let mut ctx2 = base_ctx(tree2, &hashes, &wad);
+        ctx2.file_path = "data/characters/x/skins/skin0.bin".to_string();
+        ctx2.game = Some(&empty_game);
+
+        assert!(
+            !collect_dead_links(&ctx2, "SkinCharacterDataProperties", &[gear_target()]).is_empty()
+        );
+        assert!(collect_pullable_dead_links(
+            &ctx2,
+            "SkinCharacterDataProperties",
+            &[gear_target()]
+        )
+        .is_empty());
     }
 
     #[test]
