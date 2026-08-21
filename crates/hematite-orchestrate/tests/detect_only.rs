@@ -80,7 +80,7 @@ fn spell_object_bin() -> Vec<u8> {
     objects.insert(0x1234_5678u32, obj);
     let tree = BinTree {
         objects,
-        linked: vec![],
+        ..Default::default()
     };
 
     let provider = FileBinProvider::new();

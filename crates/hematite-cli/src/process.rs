@@ -311,8 +311,18 @@ fn process_bin_file(
         additional_bins: Vec::new(),
     };
 
-    // Run fixes
+    // Run fixes (standalone BINs have no repath stage, so the post-repath
+    // phase runs immediately after the standard one)
     let mut result = apply_fixes(&mut ctx, config, selected_fixes, dry_run);
+    let mut post_result = hematite_core::pipeline::apply_fixes_in_phase(
+        &mut ctx,
+        config,
+        selected_fixes,
+        dry_run,
+        hematite_types::config::FixPhase::PostRepath,
+    );
+    post_result.files_processed = 0;
+    result.merge(post_result);
 
     // In check mode, populate CheckInfo from detected issues
     if check {
@@ -1078,6 +1088,22 @@ fn process_wad_file(
                 }
             );
         }
+    }
+
+    // Post-repath BIN phase (e.g. string→file retype) — must run after
+    // repath because it replaces the very strings repath rewrites.
+    {
+        let sink = crate::ui::UiSink(&ui);
+        let post_result = hematite_orchestrate::fix_folder::apply_post_repath_fixes(
+            &mut all_files,
+            config,
+            selected_fixes,
+            champions,
+            hash_provider,
+            dry_run,
+            &sink,
+        );
+        total_result.merge(post_result);
     }
 
     // In check mode, populate CheckInfo with skin detection

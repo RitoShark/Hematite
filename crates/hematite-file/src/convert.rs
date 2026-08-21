@@ -20,6 +20,8 @@ pub fn rs_bin_tree_to_hematite(rs_bin: RsBin) -> Result<BinTree> {
     Ok(BinTree {
         objects,
         linked: rs_bin.linked,
+        trailing: rs_bin.trailing,
+        trailer_files: Default::default(),
     })
 }
 
@@ -30,6 +32,15 @@ pub fn hematite_tree_to_rs_bin(tree: &BinTree) -> Result<RsBin> {
 
     for obj in tree.objects.values() {
         bin.entries.push(hematite_object_to_entry(obj)?);
+    }
+
+    bin.trailing = tree.trailing.clone();
+    if !tree.trailer_files.is_empty() {
+        let mut trailer = rs_bin::read_trailer(&bin.trailing);
+        trailer
+            .files
+            .extend(tree.trailer_files.iter().map(|(h, p)| (*h, p.clone())));
+        bin.trailing = rs_bin::append_trailer(&bin.trailing, &trailer);
     }
 
     Ok(bin)

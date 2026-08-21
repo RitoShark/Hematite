@@ -28,6 +28,7 @@ pub mod remove_unreferenced;
 pub mod rename_hash;
 pub mod replace_ext;
 pub mod resolve_refs;
+pub mod retype_file;
 pub mod shader_fallback;
 pub mod split_entries;
 pub mod vfx_shape;
@@ -121,6 +122,7 @@ pub fn apply_transform(
             nuke_fallback_field.as_deref(),
         ),
         TransformAction::ResolveDeadRefs { extensions } => resolve_refs::apply(ctx, extensions),
+        TransformAction::RetypeStringToFile { targets } => retype_file::apply(ctx, targets),
         TransformAction::SplitEntriesByType {
             entry_types,
             output_path_template,

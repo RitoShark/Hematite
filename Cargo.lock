@@ -782,6 +782,7 @@ dependencies = [
  "serde_json",
  "strsim",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]

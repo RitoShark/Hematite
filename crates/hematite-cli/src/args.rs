@@ -14,6 +14,7 @@
 //! | `--pull-cac` | Pull missing ContextualActionData entries from the live game |
 //! | `--fix-refs` | Rewrite dead asset references using the live game |
 //! | `--relocate-bins` | Relocate legacy combo-bin WAD entries |
+//! | `--file-refs` | Convert migrated asset-path strings to xxh64 file references |
 //! | `--all` / `-a` | Enable all fixes |
 //!
 //! ## Output control
@@ -106,6 +107,13 @@ pub struct Cli {
         help = "Relocate legacy combo-bin WAD entries to their multi-skin path"
     )]
     pub relocate_bins: bool,
+
+    #[arg(
+        long,
+        help = "Convert migrated asset-path strings to xxh64 'file' references \
+                (Riot's BIN type migration — old string-typed fields no longer load)"
+    )]
+    pub file_refs: bool,
 
     #[arg(short, long, help = "Enable all fixes")]
     pub all: bool,
@@ -282,6 +290,7 @@ const ALL_FIX_IDS: &[&str] = &[
     "gear_pull",
     "cac_pull",
     "entry_validator",
+    "file_ref_migration",
 ];
 
 /// Collect selected fix IDs based on CLI flags.
@@ -341,6 +350,9 @@ pub fn collect_selected_fixes(cli: &Cli) -> Vec<String> {
     }
     if cli.relocate_bins {
         fixes.push("combo_bin_relocate".into());
+    }
+    if cli.file_refs {
+        fixes.push("file_ref_migration".into());
     }
 
     // If --all or no specific flags: apply all fixes
@@ -403,7 +415,45 @@ mod tests {
         let config: hematite_types::config::FixConfig = serde_json::from_str(&raw)
             .unwrap_or_else(|e| panic!("cannot parse {}: {e}", config_path.display()));
 
-        assert_eq!(config.version, "2.2.0");
+        assert_eq!(config.version, "2.3.0");
+
+        // file_ref_migration: class_field_is_string detect +
+        // retype_string_to_file apply, post_repath phase (it destroys the
+        // strings repath needs, so it must never run in the standard pass).
+        let file_refs = config
+            .fixes
+            .get("file_ref_migration")
+            .expect("file_ref_migration rule missing");
+        assert!(file_refs.enabled);
+        assert_eq!(file_refs.severity, "critical");
+        assert_eq!(
+            file_refs.phase,
+            hematite_types::config::FixPhase::PostRepath,
+            "file_ref_migration must run post-repath"
+        );
+        match &file_refs.detect {
+            DetectionRule::ClassFieldIsString { targets } => {
+                assert!(
+                    targets
+                        .iter()
+                        .any(|t| t.class == "AnimationResourceData"
+                            && t.field == "mAnimationFilePath")
+                );
+            }
+            other => {
+                panic!("file_ref_migration.detect: expected ClassFieldIsString, got {other:?}")
+            }
+        }
+        match &file_refs.apply {
+            TransformAction::RetypeStringToFile { targets } => {
+                assert!(targets.iter().any(
+                    |t| t.class == "StaticMaterialShaderSamplerDef" && t.field == "texturePath"
+                ));
+            }
+            other => {
+                panic!("file_ref_migration.apply: expected RetypeStringToFile, got {other:?}")
+            }
+        }
 
         // gear_pull: dead_entry_link detect + pull_entries_from_game apply
         // with nuke_fallback_field set (last-resort fallback).

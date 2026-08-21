@@ -84,8 +84,23 @@ pub struct FixRule {
     pub description: String,
     pub enabled: bool,
     pub severity: String,
+    #[serde(default)]
+    pub phase: FixPhase,
     pub detect: DetectionRule,
     pub apply: TransformAction,
+}
+
+/// When in the pipeline a BIN-level rule runs.
+///
+/// `PostRepath` rules run in a second pass after the repath stage, because
+/// they destroy the string paths repath needs to see (e.g. retyping asset
+/// path strings into xxh64 `file` hashes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixPhase {
+    #[default]
+    Standard,
+    PostRepath,
 }
 
 /// How to detect an issue in a BIN file.
@@ -162,6 +177,12 @@ pub enum DetectionRule {
         main_entry_type: String,
         targets: Vec<EntryValidationTarget>,
     },
+
+    /// One of the targeted (class, field) pairs still holds a `string` value —
+    /// the field was migrated to the xxh64 `file` type by Riot and the mod's
+    /// BIN predates the migration.
+    #[serde(rename = "class_field_is_string")]
+    ClassFieldIsString { targets: Vec<ClassFieldTarget> },
 }
 
 /// How to fix a detected issue.
@@ -309,6 +330,23 @@ pub enum TransformAction {
         /// Extensions to consider (no leading dot), e.g. ["dds","tex","anm","skn","skl","scb","sco"].
         extensions: Vec<String>,
     },
+
+    /// Convert `string` values to xxh64 `file` hashes on the targeted
+    /// (class, field) pairs — Riot's asset-reference type migration. Handles
+    /// plain fields plus `option[string]`/`list[string]` and map values. Each
+    /// converted path's `hash → path` pair is recorded in the BIN's trailer
+    /// side table so the readable path survives the retype. Rules using this
+    /// action must set `"phase": "post_repath"`.
+    #[serde(rename = "retype_string_to_file")]
+    RetypeStringToFile { targets: Vec<ClassFieldTarget> },
+}
+
+/// A (class, field) pair targeted by type-migration rules. Both accept a
+/// name (FNV1a-hashed, lowercased) or a `0x…` hex hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassFieldTarget {
+    pub class: String,
+    pub field: String,
 }
 
 /// Parent embed to create when EnsureField target doesn't exist yet.

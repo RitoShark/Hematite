@@ -292,6 +292,7 @@ fn baseline_cli(input: PathBuf) -> Cli {
         pull_cac: false,
         fix_refs: false,
         relocate_bins: false,
+        file_refs: false,
         all: false,
         json: false,
         dry_run: false,

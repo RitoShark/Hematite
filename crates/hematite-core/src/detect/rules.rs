@@ -88,6 +88,10 @@ pub fn detect_issue(rule: &DetectionRule, ctx: &FixContext) -> bool {
             main_entry_type,
             targets,
         } => detect_dead_entry_link(ctx, main_entry_type, targets),
+
+        DetectionRule::ClassFieldIsString { targets } => {
+            crate::transform::retype_file::detect(tree, targets)
+        }
     }
 }
 

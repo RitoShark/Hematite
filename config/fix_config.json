@@ -1,6 +1,6 @@
 {
-    "version": "2.2.0",
-    "last_updated": "2026-07-10",
+    "version": "2.3.0",
+    "last_updated": "2026-08-21",
     "repath": {
         "enabled": true,
         "prefix": "hematite",
@@ -22,6 +22,35 @@
         ]
     },
     "fixes": {
+        "file_ref_migration": {
+            "name": "Asset Reference Type Migration",
+            "description": "Riot migrated asset-path fields from string to xxh64 'file' references; string-typed fields no longer load. Converts strings on the migrated (class, field) pairs to file hashes and records hash->path pairs in the BIN trailer. Runs after repath so repathed paths are the ones hashed.",
+            "enabled": true,
+            "severity": "critical",
+            "phase": "post_repath",
+            "detect": {
+                "type": "class_field_is_string",
+                "targets": [
+                    { "class": "AnimationResourceData", "field": "mAnimationFilePath" },
+                    { "class": "CensoredImage", "field": "image" },
+                    { "class": "SkinCharacterDataProperties", "field": "iconCircle" },
+                    { "class": "SkinCharacterDataProperties", "field": "iconSquare" },
+                    { "class": "SkinMeshDataProperties", "field": "texture" },
+                    { "class": "StaticMaterialShaderSamplerDef", "field": "texturePath" }
+                ]
+            },
+            "apply": {
+                "type": "retype_string_to_file",
+                "targets": [
+                    { "class": "AnimationResourceData", "field": "mAnimationFilePath" },
+                    { "class": "CensoredImage", "field": "image" },
+                    { "class": "SkinCharacterDataProperties", "field": "iconCircle" },
+                    { "class": "SkinCharacterDataProperties", "field": "iconSquare" },
+                    { "class": "SkinMeshDataProperties", "field": "texture" },
+                    { "class": "StaticMaterialShaderSamplerDef", "field": "texturePath" }
+                ]
+            }
+        },
         "merge_linked_bins": {
             "name": "Merge Linked BINs",
             "description": "Recursively merges linked dependency BINs (spells, animation, etc.) into parent character BINs, removing the separate dependency files from the WAD.",

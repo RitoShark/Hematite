@@ -608,6 +608,22 @@ pub fn fix_folder(
         }
     }
 
+    // === POST-REPATH BIN PHASE ===
+    // Rules marked `"phase": "post_repath"` (e.g. the string→file retype) run
+    // after repath because they replace the very strings repath rewrites.
+    {
+        let post_result = apply_post_repath_fixes(
+            &mut all_files,
+            config,
+            selected_fixes,
+            champions,
+            hash_provider,
+            dry_run,
+            progress,
+        );
+        total_result.merge(post_result);
+    }
+
     if check {
         use hematite_core::detect::skin::SkinDetector;
 
@@ -710,6 +726,81 @@ pub fn fix_folder(
     }
 
     Ok(total_result)
+}
+
+/// Run the `post_repath`-phase BIN fixes over every BIN in `all_files`,
+/// writing changed BINs back in place. Shared by the folder pipeline and the
+/// CLI's mounted-WAD pipeline. In `dry_run` mode detections are still
+/// recorded (for `--check`) but nothing is modified.
+pub fn apply_post_repath_fixes(
+    all_files: &mut [(u64, String, Vec<u8>)],
+    config: &FixConfig,
+    selected_fixes: &[String],
+    champions: &CharacterRelations,
+    hash_provider: &Arc<dyn HashProvider>,
+    dry_run: bool,
+    progress: &dyn ProgressSink,
+) -> ProcessResult {
+    use hematite_file::wad_adapter::FileWadProvider;
+    use hematite_types::config::FixPhase;
+
+    let has_post_rules = config
+        .fixes
+        .iter()
+        .any(|(id, r)| r.enabled && r.phase == FixPhase::PostRepath && selected_fixes.contains(id));
+    if !has_post_rules {
+        return ProcessResult::default();
+    }
+
+    let bin_provider = FileBinProvider;
+    let wad_provider = FileWadProvider::from_hashes(all_files.iter().map(|(h, _, _)| *h).collect());
+
+    let mut total = ProcessResult::default();
+    for (_hash, path, bytes) in all_files.iter_mut() {
+        let is_bin = path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
+        if !is_bin {
+            continue;
+        }
+        let Ok(tree) = bin_provider.parse_bytes(bytes) else {
+            continue;
+        };
+
+        let mut ctx = FixContext {
+            tree,
+            hashes: hash_provider.as_ref(),
+            wad: &wad_provider,
+            champions,
+            files_to_remove: Vec::new(),
+            file_path: path.clone(),
+            linked_trees: std::collections::HashMap::new(),
+            shader_validator: None,
+            game: None,
+            additional_bins: Vec::new(),
+        };
+
+        let mut result = hematite_core::pipeline::apply_fixes_in_phase(
+            &mut ctx,
+            config,
+            selected_fixes,
+            dry_run,
+            FixPhase::PostRepath,
+        );
+        result.files_processed = 0;
+
+        if result.fixes_applied > 0 {
+            for fix in &result.applied_fixes {
+                progress.fix_applied(&fix.fix_name, Some(fix.changes_count));
+            }
+            if !dry_run {
+                match bin_provider.write_bytes(&ctx.tree) {
+                    Ok(new_bytes) => *bytes = new_bytes,
+                    Err(e) => tracing::warn!("Failed to write post-phase BIN {}: {}", path, e),
+                }
+            }
+        }
+        total.merge(result);
+    }
+    total
 }
 
 /// Prime the live `GameIndex` with each seed champion's base WAD plus any

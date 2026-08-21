@@ -20,6 +20,13 @@ pub struct BinTree {
     pub objects: IndexMap<u32, BinObject>,
     /// Linked BIN dependencies (paths from the BIN header's `dependencies` list).
     pub linked: Vec<String>,
+    /// Raw bytes after the declared BIN body (e.g. the CELMAP hash→path side
+    /// table). Preserved verbatim through parse → write.
+    pub trailing: Vec<u8>,
+    /// xxh64 `file` hash → original path pairs produced by transforms that
+    /// retype path strings into hashes. Merged into the trailer side table by
+    /// the write adapter so the readable paths are never lost.
+    pub trailer_files: std::collections::BTreeMap<u64, String>,
 }
 
 /// A single object in a BIN tree.

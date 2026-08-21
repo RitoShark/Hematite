@@ -52,7 +52,7 @@ mod tests {
         let provider = FileBinProvider::new();
         let tree = BinTree {
             objects: IndexMap::new(),
-            linked: vec![],
+            ..Default::default()
         };
 
         let bytes = provider.write_bytes(&tree).unwrap();
@@ -92,7 +92,7 @@ mod tests {
 
         let tree = BinTree {
             objects,
-            linked: vec![],
+            ..Default::default()
         };
 
         let bytes = provider.write_bytes(&tree).unwrap();

@@ -146,8 +146,8 @@ mod tests {
                 .map(|s| s.to_string())
                 .collect();
             Ok(hematite_types::bin::BinTree {
-                objects: Default::default(),
                 linked,
+                ..Default::default()
             })
         }
         fn write_bytes(&self, _tree: &hematite_types::bin::BinTree) -> anyhow::Result<Vec<u8>> {

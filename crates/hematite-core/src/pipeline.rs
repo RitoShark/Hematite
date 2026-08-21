@@ -18,17 +18,30 @@
 use crate::context::FixContext;
 use crate::detect::detect_issue;
 use crate::transform::apply_transform;
-use hematite_types::config::{DetectionRule, FixConfig};
+use hematite_types::config::{DetectionRule, FixConfig, FixPhase};
 use hematite_types::result::{AppliedFix, ProcessResult};
 
-/// Run selected fixes against a BIN tree.
+/// Run the standard-phase fixes against a BIN tree.
 ///
 /// Returns the modified BinTree (inside the context) and a result summary.
+/// Rules marked `"phase": "post_repath"` are skipped here — run them via
+/// [`apply_fixes_in_phase`] after the repath stage.
 pub fn apply_fixes(
     ctx: &mut FixContext<'_>,
     config: &FixConfig,
     selected_fix_ids: &[String],
     dry_run: bool,
+) -> ProcessResult {
+    apply_fixes_in_phase(ctx, config, selected_fix_ids, dry_run, FixPhase::Standard)
+}
+
+/// Run the selected fixes belonging to one pipeline phase.
+pub fn apply_fixes_in_phase(
+    ctx: &mut FixContext<'_>,
+    config: &FixConfig,
+    selected_fix_ids: &[String],
+    dry_run: bool,
+    phase: FixPhase,
 ) -> ProcessResult {
     let mut result = ProcessResult {
         files_processed: 1,
@@ -39,7 +52,7 @@ pub fn apply_fixes(
         let Some(fix_rule) = config.fixes.get(fix_id) else {
             // WAD-level fix IDs (e.g. bnk_remover, anm_remover) are handled
             // separately by the WAD pipeline — skip them silently here.
-            if !config.wad_fixes.contains_key(fix_id) {
+            if phase == FixPhase::Standard && !config.wad_fixes.contains_key(fix_id) {
                 result
                     .errors
                     .push(format!("Fix rule not found: {}", fix_id));
@@ -47,7 +60,7 @@ pub fn apply_fixes(
             continue;
         };
 
-        if !fix_rule.enabled {
+        if !fix_rule.enabled || fix_rule.phase != phase {
             continue;
         }
 
@@ -109,6 +122,7 @@ fn extract_entry_type(rule: &DetectionRule) -> Option<&str> {
         } => Some(main_entry_type.as_str()),
         DetectionRule::RecursiveStringExtensionNotInWad { .. }
         | DetectionRule::EntryTypeExistsAny { .. }
-        | DetectionRule::BnkVersionNotIn { .. } => None,
+        | DetectionRule::BnkVersionNotIn { .. }
+        | DetectionRule::ClassFieldIsString { .. } => None,
     }
 }
