@@ -479,8 +479,13 @@ pub fn fix_folder(
                     opts,
                 )?;
             } else if let Some(live) = live {
-                game_files_added =
-                    extract_missing_from_live(live, &mut all_files, &bin_provider, opts)?;
+                game_files_added = extract_missing_from_live(
+                    live,
+                    &mut all_files,
+                    &bin_provider,
+                    hash_provider.as_ref(),
+                    opts,
+                )?;
             }
 
             let index = repath_core::WadIndex::from_entries(
@@ -865,9 +870,11 @@ pub fn extract_missing_from_live(
     live: &LiveGameProvider,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,
     bin_provider: &FileBinProvider,
+    hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<u32> {
-    let stats = crate::deep_repair::resolve_from_live(live, all_files, bin_provider, opts)?;
+    let stats =
+        crate::deep_repair::resolve_from_live(live, all_files, bin_provider, hash_provider, opts)?;
     Ok(stats.files_pulled)
 }
 

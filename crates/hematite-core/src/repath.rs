@@ -33,7 +33,7 @@
 //! ```
 
 use crate::walk::{walk_tree, PropertyVisitor, VisitResult};
-use hematite_types::bin::BinTree;
+use hematite_types::bin::{BinTree, PropertyValue};
 use hematite_types::hash::FieldHash;
 use hematite_types::repath::{RepathLayout, RepathOptions};
 use std::collections::{HashMap, HashSet};
@@ -364,6 +364,40 @@ pub fn collect_bin_asset_paths(tree: &BinTree, skip_vo: bool) -> Vec<String> {
         }
     }
     v.paths
+}
+
+/// Collect every xxh64 `file` reference (`PropertyValue::WadHash`) in the
+/// tree. Post-migration game BINs carry asset references as these hashes
+/// instead of path strings, so dependency scanners must read both.
+pub fn collect_bin_asset_hashes(tree: &BinTree) -> Vec<u64> {
+    fn walk(v: &PropertyValue, out: &mut Vec<u64>) {
+        match v {
+            PropertyValue::WadHash(h) => out.push(*h),
+            PropertyValue::Struct(s) | PropertyValue::Embedded(s) => {
+                s.properties.values().for_each(|p| walk(&p.value, out))
+            }
+            PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
+                items.iter().for_each(|i| walk(i, out))
+            }
+            PropertyValue::Optional(inner) => {
+                if let Some(x) = inner.as_ref().as_ref() {
+                    walk(x, out)
+                }
+            }
+            PropertyValue::Map(entries) => entries.iter().for_each(|(k, val)| {
+                walk(k, out);
+                walk(val, out);
+            }),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for obj in tree.objects.values() {
+        for p in obj.properties.values() {
+            walk(&p.value, &mut out);
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

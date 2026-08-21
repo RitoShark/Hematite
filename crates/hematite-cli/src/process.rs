@@ -925,6 +925,7 @@ fn process_wad_file(
                     live,
                     &mut all_files,
                     &bin_provider,
+                    hash_provider.as_ref(),
                     opts,
                 )?;
             }

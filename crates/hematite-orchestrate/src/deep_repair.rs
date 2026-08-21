@@ -226,7 +226,7 @@ pub fn resolve_from_game_wad(
     game_wad_path: &Path,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,
     bin_provider: &dyn BinProvider,
-    _hash_provider: &dyn HashProvider,
+    hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<DeepRepairStats> {
     tracing::info!(
@@ -234,7 +234,7 @@ pub fn resolve_from_game_wad(
         game_wad_path.display()
     );
     let mut source = WadFileSource::open(game_wad_path)?;
-    resolve_from_source(&mut source, all_files, bin_provider, opts)
+    resolve_from_source(&mut source, all_files, bin_provider, hash_provider, opts)
 }
 
 /// Same as [`resolve_from_game_wad`], but pulling from the auto-detected,
@@ -247,6 +247,7 @@ pub fn resolve_from_live(
     provider: &LiveGameProvider,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,
     bin_provider: &dyn BinProvider,
+    hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<DeepRepairStats> {
     let mut source = LiveSource::new(provider);
@@ -254,7 +255,7 @@ pub fn resolve_from_live(
         "Deep repair: pulling from live game index ({} hash(es) indexed)",
         source.hashes().len()
     );
-    resolve_from_source(&mut source, all_files, bin_provider, opts)
+    resolve_from_source(&mut source, all_files, bin_provider, hash_provider, opts)
 }
 
 /// Shared resolution body used by both [`resolve_from_game_wad`] and
@@ -263,6 +264,7 @@ pub fn resolve_from_source(
     source: &mut dyn GamePullSource,
     all_files: &mut Vec<(u64, String, Vec<u8>)>,
     bin_provider: &dyn BinProvider,
+    hash_provider: &dyn HashProvider,
     opts: &RepathOptions,
 ) -> Result<DeepRepairStats> {
     let mut stats = DeepRepairStats::default();
@@ -325,8 +327,13 @@ pub fn resolve_from_source(
     loop {
         stats.iterations += 1;
 
-        // Collect every asset/linked path referenced by BINs the mod now ships.
+        // Collect every asset/linked path referenced by BINs the mod now
+        // ships, plus every xxh64 `file` reference (post-migration BINs carry
+        // asset refs as hashes, not strings). Hash refs only become pullable
+        // when the dictionary can name them — a raw hash has no path to ship
+        // the chunk under.
         let mut referenced: HashSet<String> = HashSet::new();
+        let mut referenced_hashes: HashSet<u64> = HashSet::new();
         for (_, path, bytes) in all_files.iter() {
             let is_bin =
                 path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
@@ -336,7 +343,23 @@ pub fn resolve_from_source(
             if let Ok(tree) = bin_provider.parse_bytes(bytes) {
                 referenced.extend(repath_core::collect_bin_asset_paths(&tree, opts.skip_vo));
                 referenced.extend(tree.linked.iter().cloned());
+                referenced_hashes.extend(repath_core::collect_bin_asset_hashes(&tree));
             }
+        }
+
+        let shipped_hashes: HashSet<u64> = all_files.iter().map(|(h, _, _)| *h).collect();
+        for h in referenced_hashes {
+            if shipped_hashes.contains(&h) {
+                continue;
+            }
+            let Some(path) = hash_provider.resolve_game_path(hematite_types::hash::GameHash(h))
+            else {
+                continue;
+            };
+            if opts.skip_vo && path.to_lowercase().contains("sounds/wwise2016/vo/") {
+                continue;
+            }
+            referenced.insert(path.to_string());
         }
 
         // Which of those are missing AND not yet attempted?
@@ -462,14 +485,43 @@ mod tests {
 
     impl BinProvider for FakeBinProvider {
         fn parse_bytes(&self, data: &[u8]) -> anyhow::Result<hematite_types::bin::BinTree> {
+            use hematite_types::bin::{BinObject, BinProperty, PropertyValue};
+            use hematite_types::hash::{FieldHash, PathHash, TypeHash};
+
             anyhow::ensure!(data.len() >= 4 && &data[..4] == b"PROP", "not a fake BIN");
             let body = std::str::from_utf8(&data[4..]).unwrap_or("");
-            let linked: Vec<String> = body
-                .split('\n')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect();
+            let mut linked = Vec::new();
+            let mut props = indexmap::IndexMap::new();
+            for line in body.split('\n').filter(|s| !s.is_empty()) {
+                // Lines like `0xHEX` become WadHash property values (the
+                // post-migration `file` reference form); others are linked deps.
+                if let Some(hex) = line.strip_prefix("0x") {
+                    let h = u64::from_str_radix(hex, 16).unwrap();
+                    let idx = props.len() as u32;
+                    props.insert(
+                        idx,
+                        BinProperty {
+                            name_hash: FieldHash(idx),
+                            value: PropertyValue::WadHash(h),
+                        },
+                    );
+                } else {
+                    linked.push(line.to_string());
+                }
+            }
+            let mut objects = indexmap::IndexMap::new();
+            if !props.is_empty() {
+                objects.insert(
+                    1,
+                    BinObject {
+                        class_hash: TypeHash(1),
+                        path_hash: PathHash(1),
+                        properties: props,
+                    },
+                );
+            }
             Ok(hematite_types::bin::BinTree {
+                objects,
                 linked,
                 ..Default::default()
             })
@@ -477,6 +529,39 @@ mod tests {
         fn write_bytes(&self, _tree: &hematite_types::bin::BinTree) -> anyhow::Result<Vec<u8>> {
             unimplemented!("not needed for closure test")
         }
+    }
+
+    struct StubHashes(std::collections::HashMap<u64, String>);
+
+    impl HashProvider for StubHashes {
+        fn resolve_type(&self, _: hematite_types::hash::TypeHash) -> Option<&str> {
+            None
+        }
+        fn resolve_field(&self, _: hematite_types::hash::FieldHash) -> Option<&str> {
+            None
+        }
+        fn resolve_entry(&self, _: hematite_types::hash::PathHash) -> Option<&str> {
+            None
+        }
+        fn resolve_game_path(&self, hash: hematite_types::hash::GameHash) -> Option<&str> {
+            self.0.get(&hash.0).map(String::as_str)
+        }
+        fn type_hash(&self, _: &str) -> Option<hematite_types::hash::TypeHash> {
+            None
+        }
+        fn field_hash(&self, _: &str) -> Option<hematite_types::hash::FieldHash> {
+            None
+        }
+        fn has_game_path(&self, _: &str) -> bool {
+            false
+        }
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    fn null_hashes() -> StubHashes {
+        StubHashes(std::collections::HashMap::new())
     }
 
     fn fake_bin(deps: &[&str]) -> Vec<u8> {
@@ -702,14 +787,74 @@ mod tests {
         )];
 
         let opts = RepathOptions::new("test");
-        let stats =
-            resolve_from_source(&mut source, &mut all_files, &FakeBinProvider, &opts).unwrap();
+        let stats = resolve_from_source(
+            &mut source,
+            &mut all_files,
+            &FakeBinProvider,
+            &null_hashes(),
+            &opts,
+        )
+        .unwrap();
 
         assert_eq!(stats.files_pulled, 1);
         assert_eq!(stats.missing_unresolved, 0);
         assert!(all_files
             .iter()
             .any(|(_, p, _)| p == "data/characters/yone/skins/dep.bin"));
+    }
+
+    #[test]
+    fn resolve_from_source_pulls_hash_referenced_dependency() {
+        // Post-migration form: the mod's BIN references its dependency as an
+        // xxh64 `file` hash, not a path string. The dictionary names the hash,
+        // so deep repair can still pull the file from the game WAD.
+        let dir = tempfile::tempdir().unwrap();
+        let wad_path = dir.path().join("Yone.wad.client");
+        let dep_path = "assets/characters/yone/skins/base/yone.tex";
+        write_fixture_wad(&wad_path, &[(dep_path, b"TEXBYTES")]);
+
+        let dep_hash = wad_path_hash(dep_path);
+        let mut source = WadFileSource::open(&wad_path).unwrap();
+        let mut all_files = vec![(
+            0u64,
+            "data/characters/yone/skins/skin0.bin".to_string(),
+            fake_bin(&[&format!("0x{dep_hash:016x}")]),
+        )];
+
+        let hashes = StubHashes(std::collections::HashMap::from([(
+            dep_hash,
+            dep_path.to_string(),
+        )]));
+        let opts = RepathOptions::new("test");
+        let stats = resolve_from_source(
+            &mut source,
+            &mut all_files,
+            &FakeBinProvider,
+            &hashes,
+            &opts,
+        )
+        .unwrap();
+
+        assert_eq!(stats.files_pulled, 1);
+        assert!(all_files.iter().any(|(_, p, _)| p == dep_path));
+
+        // An unresolvable hash reference is skipped, not an error.
+        let mut source2 = WadFileSource::open(&wad_path).unwrap();
+        let mut all_files2 = vec![(
+            0u64,
+            "data/characters/yone/skins/skin0.bin".to_string(),
+            fake_bin(&["0xdeadbeefdeadbeef"]),
+        )];
+        let stats2 = resolve_from_source(
+            &mut source2,
+            &mut all_files2,
+            &FakeBinProvider,
+            &null_hashes(),
+            &opts,
+        )
+        .unwrap();
+        assert_eq!(stats2.files_pulled, 0);
+        assert_eq!(all_files2.len(), 1);
     }
 
     #[test]
@@ -739,7 +884,14 @@ mod tests {
         )];
 
         let opts = RepathOptions::new("test");
-        let stats = resolve_from_live(&provider, &mut all_files, &FakeBinProvider, &opts).unwrap();
+        let stats = resolve_from_live(
+            &provider,
+            &mut all_files,
+            &FakeBinProvider,
+            &null_hashes(),
+            &opts,
+        )
+        .unwrap();
 
         assert_eq!(stats.files_pulled, 1);
         assert_eq!(stats.missing_unresolved, 0);
