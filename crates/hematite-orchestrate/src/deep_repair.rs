@@ -137,6 +137,21 @@ pub fn canonical_seed_bin_paths(seed: &SkinSeed) -> Vec<String> {
     vec![primary, assets]
 }
 
+/// `(data|assets)/characters/{champ}/{champ}.bin` — the champion base BIN.
+/// NEVER pulled into a mod: it goes stale every patch and is exactly what
+/// `champion_bin_remover` exists to strip back out.
+fn is_champion_base_bin(path: &str) -> bool {
+    let lower = path.to_lowercase().replace('\\', "/");
+    let Some(rest) = lower.strip_suffix(".bin") else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() == 4
+        && (parts[0] == "data" || parts[0] == "assets")
+        && parts[1] == "characters"
+        && parts[2] == parts[3]
+}
+
 /// Extract a single asset path from the game WAD, trying the literal path,
 /// extension alternates (`.dds`↔`.tex`, `.sco`↔`.scb`), and Riot's
 /// suffix-stripped rename (via [`resolve_wad_hash_for`]).
@@ -368,7 +383,7 @@ pub fn resolve_from_source(
             .into_iter()
             .filter(|p| {
                 let lower = p.to_lowercase().replace('\\', "/");
-                !seen.contains(&lower) && !index.has(p, wad_path_hash)
+                !seen.contains(&lower) && !index.has(p, wad_path_hash) && !is_champion_base_bin(p)
             })
             .collect();
 
@@ -801,6 +816,53 @@ mod tests {
         assert!(all_files
             .iter()
             .any(|(_, p, _)| p == "data/characters/yone/skins/dep.bin"));
+    }
+
+    #[test]
+    fn champion_base_bin_is_never_pulled() {
+        assert!(is_champion_base_bin("data/characters/kayn/kayn.bin"));
+        assert!(is_champion_base_bin("DATA/Characters/Kayn/Kayn.bin"));
+        assert!(is_champion_base_bin("assets/characters/yone/yone.bin"));
+        assert!(!is_champion_base_bin(
+            "data/characters/kayn/skins/skin0.bin"
+        ));
+        assert!(!is_champion_base_bin(
+            "data/characters/kayn/animations/skin0.bin"
+        ));
+        assert!(!is_champion_base_bin(
+            "data/kayn_skins_skin0_skins_skin1.bin"
+        ));
+
+        // A mod bin linking the champion base BIN must not cause a pull even
+        // when the game WAD ships it.
+        let dir = tempfile::tempdir().unwrap();
+        let wad_path = dir.path().join("Kayn.wad.client");
+        write_fixture_wad(
+            &wad_path,
+            &[("data/characters/kayn/kayn.bin", &fake_bin(&[]))],
+        );
+
+        let mut source = WadFileSource::open(&wad_path).unwrap();
+        let mut all_files = vec![(
+            0u64,
+            "data/characters/kayn/skins/skin0.bin".to_string(),
+            fake_bin(&["data/characters/kayn/kayn.bin"]),
+        )];
+
+        let opts = RepathOptions::new("test");
+        let stats = resolve_from_source(
+            &mut source,
+            &mut all_files,
+            &FakeBinProvider,
+            &null_hashes(),
+            &opts,
+        )
+        .unwrap();
+
+        assert_eq!(stats.files_pulled, 0);
+        assert!(!all_files
+            .iter()
+            .any(|(_, p, _)| p == "data/characters/kayn/kayn.bin"));
     }
 
     #[test]
