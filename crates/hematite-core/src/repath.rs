@@ -120,8 +120,29 @@ fn split_asset_path(path: &str) -> Option<(&'static str, Vec<&str>)> {
 ///   prefix is prepended as a new top-level segment so the modder's
 ///   namespace stays intact underneath. Same transform in both layouts.
 /// * **Anything else** — returned unchanged.
+/// `true` when the path already carries the repath prefix — running the
+/// fixer twice must not stack prefixes (`assets/hematite/hematite/…`), and a
+/// re-renamed chunk would strand every already-retyped `file` hash pointing
+/// at the first-fix path.
+fn already_prefixed(normalized: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    let lower = normalized.to_lowercase();
+    let prefix_lower = prefix.to_lowercase();
+    let mut segs = lower.split('/').filter(|s| !s.is_empty());
+    match segs.next() {
+        Some("assets") | Some("data") => segs.next().is_some_and(|s| s.starts_with(&prefix_lower)),
+        Some(first) => first.starts_with(&prefix_lower),
+        None => false,
+    }
+}
+
 pub fn repath_path(path: &str, prefix: &str, layout: RepathLayout) -> String {
     let normalized = path.replace('\\', "/");
+    if already_prefixed(&normalized, prefix) {
+        return normalized;
+    }
     if let Some((root, segs)) = split_asset_path(&normalized) {
         if segs.is_empty() {
             // Bare root like "assets/" — nothing to do.
@@ -797,6 +818,54 @@ mod tests {
         assert!(!is_root_skin_bin("data/shared/foo.bin"));
         assert!(!is_root_skin_bin("assets/characters/yone/yone.bin"));
         assert!(!is_root_skin_bin("data/characters/yone/yoneother.bin"));
+    }
+
+    #[test]
+    fn repath_is_idempotent_for_every_shape() {
+        // Second fixer run must never stack prefixes — a re-renamed chunk
+        // strands every already-retyped `file` hash from the first run.
+        for (path, prefix, layout) in [
+            (
+                "assets/hematite/sirdexal/icons/travis_circle.tex",
+                "hematite",
+                RepathLayout::Nested,
+            ),
+            (
+                "ASSETS/hematitecharacters/yone/skins/base/yone.tex",
+                "hematite",
+                RepathLayout::InFolder,
+            ),
+            (
+                "ASSETS/.yone1_characters/yone/skins/base/yone.tex",
+                ".yone1_",
+                RepathLayout::InFolder,
+            ),
+            (
+                "hematite/SirDexal/Icons/travis_ass_square.tex",
+                "hematite",
+                RepathLayout::InFolder,
+            ),
+        ] {
+            assert_eq!(
+                repath_path(path, prefix, layout),
+                path,
+                "already-prefixed path must not be repathed again"
+            );
+            assert!(
+                repath_wad_path(path, prefix, layout).is_none(),
+                "already-prefixed WAD entry must not be renamed again"
+            );
+        }
+
+        // Fresh paths still repath normally.
+        assert_ne!(
+            repath_path(
+                "assets/characters/yone/skins/base/yone.tex",
+                "hematite",
+                RepathLayout::InFolder
+            ),
+            "assets/characters/yone/skins/base/yone.tex"
+        );
     }
 
     #[test]
