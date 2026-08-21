@@ -383,7 +383,10 @@ pub fn resolve_from_source(
             .into_iter()
             .filter(|p| {
                 let lower = p.to_lowercase().replace('\\', "/");
-                !seen.contains(&lower) && !index.has(p, wad_path_hash) && !is_champion_base_bin(p)
+                !seen.contains(&lower)
+                    && !index.has(p, wad_path_hash)
+                    && !is_champion_base_bin(p)
+                    && !repath_core::is_soundbank(&lower)
             })
             .collect();
 
@@ -863,6 +866,34 @@ mod tests {
         assert!(!all_files
             .iter()
             .any(|(_, p, _)| p == "data/characters/kayn/kayn.bin"));
+    }
+
+    #[test]
+    fn soundbanks_are_never_pulled() {
+        let bnk = "assets/sounds/wwise2016/sfx/characters/kayn/skins/base/kayn_base_sfx_events.bnk";
+        let dir = tempfile::tempdir().unwrap();
+        let wad_path = dir.path().join("Kayn.wad.client");
+        write_fixture_wad(&wad_path, &[(bnk, b"BKHD")]);
+
+        let mut source = WadFileSource::open(&wad_path).unwrap();
+        let mut all_files = vec![(
+            0u64,
+            "data/characters/kayn/skins/skin0.bin".to_string(),
+            fake_bin(&[bnk]),
+        )];
+
+        let opts = RepathOptions::new("test");
+        let stats = resolve_from_source(
+            &mut source,
+            &mut all_files,
+            &FakeBinProvider,
+            &null_hashes(),
+            &opts,
+        )
+        .unwrap();
+
+        assert_eq!(stats.files_pulled, 0);
+        assert!(!all_files.iter().any(|(_, p, _)| p == bnk));
     }
 
     #[test]

@@ -406,6 +406,14 @@ pub fn is_root_skin_bin(path: &str) -> bool {
     false
 }
 
+/// Wwise soundbank / audio package. Repath must never touch these (chunk
+/// or string) and deep repair must never pull them: absent banks fall back
+/// to the vanilla ones, which keeps working across Riot's Wwise updates.
+pub fn is_soundbank(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".bnk") || lower.ends_with(".wpk")
+}
+
 /// Detects a League BIN file purely by content magic. Used so we can repath
 /// strings inside BINs whose path hashes weren't in the dictionary.
 pub fn looks_like_bin(bytes: &[u8]) -> bool {
@@ -579,8 +587,10 @@ pub fn repath_bin_strings(
                 return VisitResult::Skip;
             }
             // BIN references resolve by canonical path (see repath_wad_path);
-            // the chunk never moves, so the reference must not either.
-            if value.to_lowercase().ends_with(".bin") {
+            // the chunk never moves, so the reference must not either. Same
+            // deal for soundbanks.
+            let lower = value.to_lowercase();
+            if lower.ends_with(".bin") || is_soundbank(&lower) {
                 return VisitResult::Skip;
             }
             // Resolve the actual path that exists in the mod's WAD index.
@@ -657,7 +667,7 @@ pub fn repath_wad_path(path: &str, prefix: &str, layout: RepathLayout) -> Option
         // Custom hex hashes, plain VO entries, etc. — leave alone.
         return None;
     }
-    if lower.ends_with(".bin") {
+    if lower.ends_with(".bin") || is_soundbank(&lower) {
         return None;
     }
     let new = repath_path(path, prefix, layout);
@@ -1327,6 +1337,31 @@ mod tests {
         let r = repath_bin_strings(
             &mut tree,
             &opts(".yone1_", RepathLayout::InFolder),
+            &idx,
+            dummy_hash,
+        );
+        assert_eq!(r.strings_repathed, 0);
+        assert!(r.mapping.is_empty());
+    }
+
+    #[test]
+    fn soundbanks_never_repathed() {
+        let sfx =
+            "assets/sounds/wwise2016/sfx/characters/rengar/skins/base/rengar_base_sfx_events.bnk";
+        let custom = "assets/repath/sounds/rengar_custom_sfx_audio.bnk";
+        let vo_pkg = "assets/repath/sounds/rengar_vo_audio.wpk";
+        for p in [sfx, custom, vo_pkg] {
+            assert!(
+                repath_wad_path(p, "hematite", RepathLayout::InFolder).is_none(),
+                "{p} must keep its path"
+            );
+        }
+
+        let mut tree = make_tree_with_string(custom);
+        let idx = WadIndex::from_entries(vec![(dummy_hash(custom), custom.to_string())]);
+        let r = repath_bin_strings(
+            &mut tree,
+            &opts("hematite", RepathLayout::InFolder),
             &idx,
             dummy_hash,
         );
