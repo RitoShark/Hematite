@@ -109,17 +109,6 @@ fn split_asset_path(path: &str) -> Option<(&'static str, Vec<&str>)> {
     Some((stripped.0, segs))
 }
 
-/// Apply the canonical repath transform to `path`.
-///
-/// Pure; identical inputs produce identical outputs. Three shapes:
-///
-/// * **Canonical Riot path** (starts with `assets/` or `data/`) — layout-aware
-///   prefix insertion (see [`RepathLayout`]).
-/// * **Modder-root path** (`reddivinekinggaren/foo.dds` style — no canonical
-///   root, but contains a slash and ends in a known asset extension) — the
-///   prefix is prepended as a new top-level segment so the modder's
-///   namespace stays intact underneath. Same transform in both layouts.
-/// * **Anything else** — returned unchanged.
 /// `true` when the path already carries the repath prefix — running the
 /// fixer twice must not stack prefixes (`assets/hematite/hematite/…`), and a
 /// re-renamed chunk would strand every already-retyped `file` hash pointing
@@ -138,6 +127,18 @@ fn already_prefixed(normalized: &str, prefix: &str) -> bool {
     }
 }
 
+/// Apply the canonical repath transform to `path`.
+///
+/// Pure and idempotent; already-prefixed paths come back unchanged. Three
+/// shapes:
+///
+/// * **Canonical Riot path** (starts with `assets/` or `data/`) — layout-aware
+///   prefix insertion (see [`RepathLayout`]).
+/// * **Modder-root path** (`reddivinekinggaren/foo.dds` style — no canonical
+///   root, but contains a slash and ends in a known asset extension) — the
+///   prefix is prepended as a new top-level segment so the modder's
+///   namespace stays intact underneath. Same transform in both layouts.
+/// * **Anything else** — returned unchanged.
 pub fn repath_path(path: &str, prefix: &str, layout: RepathLayout) -> String {
     let normalized = path.replace('\\', "/");
     if already_prefixed(&normalized, prefix) {
