@@ -919,6 +919,16 @@ fn process_wad_file(
                 opts.layout
             );
 
+            let deduped = hematite_orchestrate::fix_folder::dedupe_stacked_prefixes(
+                &mut all_files,
+                &opts.prefix,
+                &bin_provider,
+            );
+            if deduped > 0 {
+                ui.fix_applied("Collapsed stacked repath prefix", Some(deduped));
+                total_result.fixes_applied += 1;
+            }
+
             // 0. Extract missing referenced files from the base-game so the
             //    mod becomes fully self-contained. Prefer an explicit
             //    --game-wad (unchanged, byte-identical behavior); otherwise

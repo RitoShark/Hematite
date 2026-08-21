@@ -482,6 +482,13 @@ pub fn fix_folder(
     if let Some(opts) = repath_opts {
         if !dry_run {
             ui.stage(&format!("Repathing assets (prefix “{}”)…", opts.prefix));
+
+            let deduped = dedupe_stacked_prefixes(&mut all_files, &opts.prefix, &bin_provider);
+            if deduped > 0 {
+                ui.fix_applied("Collapsed stacked repath prefix", Some(deduped));
+                total_result.fixes_applied += 1;
+            }
+
             let mut game_files_added = 0u32;
             if let Some(ref game_wad_path) = opts.game_wad {
                 game_files_added = extract_missing_from_game_wad(
@@ -752,6 +759,120 @@ pub fn fix_folder(
     Ok(total_result)
 }
 
+/// Repair pre-idempotency double-fix damage: collapse stacked repath
+/// prefixes (`assets/hematite/hematite/…`) on chunk paths and BIN strings
+/// back to the single-prefix form, so the `file` hashes retyped on the first
+/// fix resolve again. A stacked chunk whose collapse target already exists
+/// keeps its path (and its strings stay consistent with it). Returns the
+/// number of renamed chunks + rewritten strings.
+pub fn dedupe_stacked_prefixes(
+    all_files: &mut [(u64, String, Vec<u8>)],
+    prefix: &str,
+    bin_provider: &FileBinProvider,
+) -> u32 {
+    use hematite_core::walk::{walk_tree, PropertyVisitor, VisitResult};
+
+    if prefix.is_empty() {
+        return 0;
+    }
+
+    let existing: std::collections::HashSet<String> = all_files
+        .iter()
+        .map(|(_, p, _)| p.to_lowercase().replace('\\', "/"))
+        .collect();
+
+    let mut rename: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut targets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (_, p, _) in all_files.iter() {
+        if let Some(np) = repath_core::collapse_stacked_prefix(p, prefix) {
+            let np_lower = np.to_lowercase();
+            if !existing.contains(&np_lower) && targets.insert(np_lower) {
+                rename.insert(p.to_lowercase().replace('\\', "/"), np);
+            }
+        }
+    }
+
+    let mut final_paths: std::collections::HashSet<String> = existing
+        .iter()
+        .filter(|p| !rename.contains_key(*p))
+        .cloned()
+        .collect();
+    final_paths.extend(targets);
+
+    struct Collapser<'a> {
+        prefix: &'a str,
+        final_paths: &'a std::collections::HashSet<String>,
+        changes: u32,
+    }
+    impl Collapser<'_> {
+        fn collapse(&mut self, value: &str) -> Option<String> {
+            let collapsed = repath_core::collapse_stacked_prefix(value, self.prefix)?;
+            if self.final_paths.contains(&value.to_lowercase()) {
+                return None;
+            }
+            self.changes += 1;
+            Some(collapsed)
+        }
+    }
+    impl PropertyVisitor for Collapser<'_> {
+        fn visit_string(
+            &mut self,
+            value: &str,
+            _f: hematite_types::hash::FieldHash,
+        ) -> VisitResult {
+            match self.collapse(value) {
+                Some(new) => VisitResult::Mutate(new),
+                None => VisitResult::Skip,
+            }
+        }
+    }
+
+    let mut changes = 0u32;
+    for (_, path, bytes) in all_files.iter_mut() {
+        let is_bin = path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
+        if !is_bin {
+            continue;
+        }
+        let Ok(mut tree) = bin_provider.parse_bytes(bytes) else {
+            continue;
+        };
+        let mut visitor = Collapser {
+            prefix,
+            final_paths: &final_paths,
+            changes: 0,
+        };
+        walk_tree(&mut tree, &mut visitor);
+        for link in tree.linked.iter_mut() {
+            if let Some(new) = visitor.collapse(link) {
+                *link = new;
+            }
+        }
+        if visitor.changes > 0 {
+            match bin_provider.write_bytes(&tree) {
+                Ok(new_bytes) => {
+                    *bytes = new_bytes;
+                    changes += visitor.changes;
+                }
+                Err(e) => tracing::warn!("Failed to write prefix-deduped BIN {path}: {e}"),
+            }
+        }
+    }
+
+    for (hash, path, _) in all_files.iter_mut() {
+        if let Some(new) = rename.get(&path.to_lowercase().replace('\\', "/")) {
+            tracing::debug!("Deduped stacked prefix: {} -> {}", path, new);
+            *path = new.clone();
+            *hash = wad_path_hash(new);
+            changes += 1;
+        }
+    }
+
+    if changes > 0 {
+        tracing::info!("Collapsed stacked repath prefix on {changes} path(s)/string(s)");
+    }
+    changes
+}
+
 /// Output name for a fixed WAD: `Aatrox.wad.client` → `Aatrox.fixed.wad.client`.
 /// The `.fixed` marker goes before the `.wad.client` suffix so the output is
 /// still a recognizable WAD; non-WAD names just get `.fixed` appended.
@@ -846,8 +967,103 @@ pub fn apply_post_repath_fixes(
 
 #[cfg(test)]
 mod tests {
-    use super::fixed_wad_output_path;
+    use super::{dedupe_stacked_prefixes, fixed_wad_output_path};
+    use hematite_core::traits::BinProvider;
+    use hematite_file::bin_adapter::FileBinProvider;
+    use hematite_file::wad_adapter::wad_path_hash;
+    use hematite_types::bin::{BinObject, BinProperty, BinTree, PropertyValue};
+    use hematite_types::hash::{FieldHash, PathHash, TypeHash};
+    use indexmap::IndexMap;
     use std::path::Path;
+
+    fn bin_with_strings(strings: &[&str]) -> Vec<u8> {
+        let mut properties = IndexMap::new();
+        for (i, s) in strings.iter().enumerate() {
+            properties.insert(
+                i as u32,
+                BinProperty {
+                    name_hash: FieldHash(i as u32),
+                    value: PropertyValue::String((*s).to_string()),
+                },
+            );
+        }
+        let mut objects = IndexMap::new();
+        objects.insert(
+            1,
+            BinObject {
+                class_hash: TypeHash(2),
+                path_hash: PathHash(1),
+                properties,
+            },
+        );
+        FileBinProvider
+            .write_bytes(&BinTree {
+                objects,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn strings_of(bytes: &[u8]) -> Vec<String> {
+        let tree = FileBinProvider.parse_bytes(bytes).unwrap();
+        tree.objects
+            .values()
+            .flat_map(|o| o.properties.values())
+            .filter_map(|p| match &p.value {
+                PropertyValue::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dedupe_repairs_double_fix_damage() {
+        // The exact damage shape from the field: chunk + one string carry the
+        // stacked prefix, while a file hash from the first fix still points
+        // at the single-prefix path.
+        let double = "assets/hematite/hematite/sirdexal/icons/travis_square.tex";
+        let single = "assets/hematite/sirdexal/icons/travis_square.tex";
+        let mut all_files = vec![
+            (wad_path_hash(double), double.to_string(), vec![1, 2, 3]),
+            (
+                wad_path_hash("data/characters/x/skins/skin0.bin"),
+                "data/characters/x/skins/skin0.bin".to_string(),
+                bin_with_strings(&[double, "assets/characters/x/ok.tex"]),
+            ),
+        ];
+
+        let changes = dedupe_stacked_prefixes(&mut all_files, "hematite", &FileBinProvider);
+        assert_eq!(changes, 2, "one chunk rename + one string rewrite");
+        assert_eq!(all_files[0].1, single);
+        assert_eq!(all_files[0].0, wad_path_hash(single));
+        assert_eq!(
+            strings_of(&all_files[1].2),
+            vec![single.to_string(), "assets/characters/x/ok.tex".to_string()]
+        );
+    }
+
+    #[test]
+    fn dedupe_keeps_stacked_chunk_when_target_exists() {
+        let double = "assets/hematite/hematite/x.tex";
+        let single = "assets/hematite/x.tex";
+        let mut all_files = vec![
+            (wad_path_hash(double), double.to_string(), vec![1]),
+            (wad_path_hash(single), single.to_string(), vec![2]),
+            (
+                wad_path_hash("data/characters/x/skins/skin0.bin"),
+                "data/characters/x/skins/skin0.bin".to_string(),
+                bin_with_strings(&[double]),
+            ),
+        ];
+
+        dedupe_stacked_prefixes(&mut all_files, "hematite", &FileBinProvider);
+        assert_eq!(all_files[0].1, double, "collision target keeps its path");
+        assert_eq!(
+            strings_of(&all_files[2].2),
+            vec![double.to_string()],
+            "string stays consistent with the kept chunk"
+        );
+    }
 
     #[test]
     fn fixed_wad_name_keeps_single_wad_client_suffix() {

@@ -127,6 +127,65 @@ fn already_prefixed(normalized: &str, prefix: &str) -> bool {
     }
 }
 
+/// Collapse a stacked repath prefix back to a single one, or `None` when the
+/// path carries no stacking. Repairs damage from pre-idempotency double
+/// fixes: `assets/hematite/hematite/X` and `ASSETS/hematitehematiteX` both
+/// collapse to their single-prefix form, so the `file` hashes retyped on the
+/// first fix resolve again. A single legit prefix followed by a segment that
+/// merely BEGINS with the prefix (`hematite/hematitefan/…`) is not stacking
+/// and stays untouched.
+pub fn collapse_stacked_prefix(path: &str, prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let normalized = path.replace('\\', "/");
+    let lower = normalized.to_lowercase();
+    if lower.len() != normalized.len() {
+        return None;
+    }
+    let pl = prefix.to_lowercase();
+
+    let seg_start = if lower.starts_with("assets/") {
+        7
+    } else if lower.starts_with("data/") {
+        5
+    } else {
+        0
+    };
+
+    let full_seg = format!("{pl}/");
+    let mut cut = seg_start;
+    loop {
+        let rest = &lower[cut..];
+        if !rest.starts_with(&full_seg) {
+            break;
+        }
+        let next = &rest[full_seg.len()..];
+        let next_is_full_prefix_seg = next.starts_with(&full_seg)
+            || (next.starts_with(&pl) && next[pl.len()..].chars().next() == Some('/'));
+        let next_is_concat_stack = next.starts_with(&pl) && next[pl.len()..].starts_with(&pl);
+        if next_is_full_prefix_seg || next_is_concat_stack {
+            cut += full_seg.len();
+        } else {
+            break;
+        }
+    }
+
+    let mut concat_cut = 0;
+    let rest = &lower[cut..];
+    while rest[concat_cut..].starts_with(&pl) && rest[concat_cut + pl.len()..].starts_with(&pl) {
+        concat_cut += pl.len();
+    }
+
+    if cut == seg_start && concat_cut == 0 {
+        return None;
+    }
+    let mut out = String::with_capacity(normalized.len());
+    out.push_str(&normalized[..seg_start]);
+    out.push_str(&normalized[cut + concat_cut..]);
+    Some(out)
+}
+
 /// Apply the canonical repath transform to `path`.
 ///
 /// Pure and idempotent; already-prefixed paths come back unchanged. Three
@@ -819,6 +878,47 @@ mod tests {
         assert!(!is_root_skin_bin("data/shared/foo.bin"));
         assert!(!is_root_skin_bin("assets/characters/yone/yone.bin"));
         assert!(!is_root_skin_bin("data/characters/yone/yoneother.bin"));
+    }
+
+    #[test]
+    fn collapse_stacked_prefix_repairs_double_fix_damage() {
+        for (path, prefix, expect) in [
+            (
+                "assets/hematite/hematite/SirDexal/Icons/travis_ass_square.tex",
+                "hematite",
+                Some("assets/hematite/SirDexal/Icons/travis_ass_square.tex"),
+            ),
+            (
+                "assets/hematite/hematite/hematite/x.tex",
+                "hematite",
+                Some("assets/hematite/x.tex"),
+            ),
+            (
+                "ASSETS/hematitehematitecharacters/yone/x.tex",
+                "hematite",
+                Some("ASSETS/hematitecharacters/yone/x.tex"),
+            ),
+            (
+                "hematite/hematite/SirDexal/x.tex",
+                "hematite",
+                Some("hematite/SirDexal/x.tex"),
+            ),
+            (
+                "DATA/.yone1_.yone1_characters/yone/x.tex",
+                ".yone1_",
+                Some("DATA/.yone1_characters/yone/x.tex"),
+            ),
+            ("assets/hematite/sirdexal/icons/x.tex", "hematite", None),
+            ("hematite/hematitefan/x.tex", "hematite", None),
+            ("assets/characters/yone/x.tex", "hematite", None),
+            ("assets/hematite/x.tex", "", None),
+        ] {
+            assert_eq!(
+                collapse_stacked_prefix(path, prefix).as_deref(),
+                expect,
+                "collapse({path}, {prefix})"
+            );
+        }
     }
 
     #[test]
