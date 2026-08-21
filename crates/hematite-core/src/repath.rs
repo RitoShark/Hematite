@@ -481,6 +481,58 @@ pub fn collect_bin_asset_hashes(tree: &BinTree) -> Vec<u64> {
     out
 }
 
+/// Rewrite xxh64 `file` references (`PropertyValue::WadHash`) after WAD
+/// entries were renamed. `renames` maps `old_entry_hash` →
+/// `(new_entry_hash, new_path)`; every matching hash in the tree is replaced
+/// and the new pair is recorded in `tree.trailer_files` so the path survives
+/// in the CELMAP trailer. This is what keeps hand-migrated mods (whose BINs
+/// already carry `file` hashes instead of strings) working through repath —
+/// string rewriting never sees them, but the chunks still move.
+pub fn rewrite_bin_file_hashes(tree: &mut BinTree, renames: &HashMap<u64, (u64, String)>) -> u32 {
+    fn walk(
+        v: &mut PropertyValue,
+        renames: &HashMap<u64, (u64, String)>,
+        hits: &mut Vec<(u64, String)>,
+    ) {
+        match v {
+            PropertyValue::WadHash(h) => {
+                if let Some((new_hash, new_path)) = renames.get(h) {
+                    *h = *new_hash;
+                    hits.push((*new_hash, new_path.clone()));
+                }
+            }
+            PropertyValue::Struct(s) | PropertyValue::Embedded(s) => s
+                .properties
+                .values_mut()
+                .for_each(|p| walk(&mut p.value, renames, hits)),
+            PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
+                items.iter_mut().for_each(|i| walk(i, renames, hits))
+            }
+            PropertyValue::Optional(inner) => {
+                if let Some(x) = inner.as_mut().as_mut() {
+                    walk(x, renames, hits)
+                }
+            }
+            PropertyValue::Map(entries) => entries.iter_mut().for_each(|(k, val)| {
+                walk(k, renames, hits);
+                walk(val, renames, hits);
+            }),
+            _ => {}
+        }
+    }
+    let mut hits = Vec::new();
+    for obj in tree.objects.values_mut() {
+        for p in obj.properties.values_mut() {
+            walk(&mut p.value, renames, &mut hits);
+        }
+    }
+    let count = hits.len() as u32;
+    for (h, p) in hits {
+        tree.trailer_files.insert(h, p);
+    }
+    count
+}
+
 // ---------------------------------------------------------------------------
 // BIN repathing
 // ---------------------------------------------------------------------------
@@ -878,6 +930,92 @@ mod tests {
         assert!(!is_root_skin_bin("data/shared/foo.bin"));
         assert!(!is_root_skin_bin("assets/characters/yone/yone.bin"));
         assert!(!is_root_skin_bin("data/characters/yone/yoneother.bin"));
+    }
+
+    #[test]
+    fn rewrite_bin_file_hashes_replaces_and_records_trailer() {
+        let old_a = 0x1111u64;
+        let old_b = 0x2222u64;
+        let untouched = 0x9999u64;
+
+        let mut props = IndexMap::new();
+        props.insert(
+            1,
+            BinProperty {
+                name_hash: FieldHash(1),
+                value: PropertyValue::WadHash(old_a),
+            },
+        );
+        props.insert(
+            2,
+            BinProperty {
+                name_hash: FieldHash(2),
+                value: PropertyValue::Optional(Box::new(Some(PropertyValue::WadHash(old_b)))),
+            },
+        );
+        props.insert(
+            3,
+            BinProperty {
+                name_hash: FieldHash(3),
+                value: PropertyValue::Container(vec![
+                    PropertyValue::WadHash(old_a),
+                    PropertyValue::WadHash(untouched),
+                ]),
+            },
+        );
+        let mut objects = IndexMap::new();
+        objects.insert(
+            1,
+            BinObject {
+                class_hash: TypeHash(7),
+                path_hash: PathHash(1),
+                properties: props,
+            },
+        );
+        let mut tree = BinTree {
+            objects,
+            ..Default::default()
+        };
+
+        let renames: HashMap<u64, (u64, String)> = [
+            (old_a, (0xAAAAu64, "assets/hematite/a.anm".to_string())),
+            (old_b, (0xBBBBu64, "assets/hematite/b.tex".to_string())),
+        ]
+        .into_iter()
+        .collect();
+
+        let count = rewrite_bin_file_hashes(&mut tree, &renames);
+        assert_eq!(count, 3);
+
+        let obj = &tree.objects[&1];
+        assert!(matches!(
+            obj.properties[&1].value,
+            PropertyValue::WadHash(0xAAAA)
+        ));
+        match &obj.properties[&2].value {
+            PropertyValue::Optional(inner) => {
+                assert!(matches!(**inner, Some(PropertyValue::WadHash(0xBBBB))))
+            }
+            other => panic!("expected Optional, got {other:?}"),
+        }
+        match &obj.properties[&3].value {
+            PropertyValue::Container(items) => {
+                assert!(matches!(items[0], PropertyValue::WadHash(0xAAAA)));
+                assert!(matches!(items[1], PropertyValue::WadHash(0x9999)));
+            }
+            other => panic!("expected Container, got {other:?}"),
+        }
+        assert_eq!(
+            tree.trailer_files.get(&0xAAAA).map(String::as_str),
+            Some("assets/hematite/a.anm")
+        );
+        assert_eq!(
+            tree.trailer_files.get(&0xBBBB).map(String::as_str),
+            Some("assets/hematite/b.tex")
+        );
+        assert!(!tree.trailer_files.contains_key(&untouched));
+
+        assert_eq!(rewrite_bin_file_hashes(&mut tree, &renames), 0);
     }
 
     #[test]
