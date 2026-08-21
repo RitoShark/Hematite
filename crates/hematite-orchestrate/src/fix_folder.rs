@@ -180,10 +180,23 @@ pub fn fix_folder(
     // === WAD-LEVEL PIPELINE ===
     progress.stage("Detecting WAD-level issues…");
     tracing::debug!("Running WAD-level pipeline...");
-    let wad_output =
-        wad_pipeline::apply_wad_fixes(&all_files, config, selected_fixes, hash_provider.as_ref())?;
+    let referenced = collect_referenced_assets(&all_files, &bin_provider);
+    let wad_output = wad_pipeline::apply_wad_fixes(
+        &all_files,
+        config,
+        selected_fixes,
+        hash_provider.as_ref(),
+        &referenced,
+    )?;
 
     shared_files_to_remove.extend(wad_output.files_to_remove.clone());
+    // Drop removed entries NOW: repath renames paths later, and a rename
+    // would make the write-time path filter silently miss the removal.
+    if !dry_run && !wad_output.files_to_remove.is_empty() {
+        let removed: std::collections::HashSet<&String> =
+            wad_output.files_to_remove.iter().collect();
+        all_files.retain(|(_, p, _)| !removed.contains(p));
+    }
 
     for wad_fix in &wad_output.applied_fixes {
         progress.fix_applied(&wad_fix.fix_name, Some(wad_fix.files_affected));
@@ -271,13 +284,11 @@ pub fn fix_folder(
         total_result.fixes_applied += conversion_count;
     }
 
-    // Perform in-place byte transforms (real fix only — see above).
-    let mut transform_count = 0u32;
-    if !dry_run && !wad_output.files_to_transform.is_empty() {
-        tracing::info!(
-            "Applying {} in-place byte transforms...",
-            wad_output.files_to_transform.len()
-        );
+    // In-place byte transforms run even on dry_run (without mutating) so the
+    // reported counts reflect files the converter actually changed, not mere
+    // extension matches.
+    if !wad_output.files_to_transform.is_empty() {
+        let mut per_fix: std::collections::BTreeMap<String, (String, u32)> = Default::default();
         for op in &wad_output.files_to_transform {
             if let Some((_, _, bytes)) = all_files.iter_mut().find(|(_, p, _)| p == &op.path) {
                 match converter_registry.convert(&op.converter, bytes) {
@@ -290,8 +301,13 @@ pub fn fix_folder(
                                 bytes.len(),
                                 new_bytes.len()
                             );
-                            *bytes = new_bytes;
-                            transform_count += 1;
+                            if !dry_run {
+                                *bytes = new_bytes;
+                            }
+                            per_fix
+                                .entry(op.fix_id.clone())
+                                .or_insert_with(|| (op.fix_name.clone(), 0))
+                                .1 += 1;
                         }
                     }
                     Err(e) => {
@@ -305,7 +321,10 @@ pub fn fix_folder(
                 }
             }
         }
-        total_result.fixes_applied += transform_count;
+        for (fix_name, count) in per_fix.values() {
+            progress.fix_applied(fix_name, Some(*count));
+            total_result.fixes_applied += count;
+        }
     }
 
     // Append injected files
@@ -558,6 +577,8 @@ pub fn fix_folder(
             let mut new_path_set: Vec<String> = Vec::new();
             let mut seen_dest: std::collections::HashMap<String, u32> =
                 std::collections::HashMap::new();
+            let mut hash_renames: std::collections::HashMap<u64, (u64, String)> =
+                std::collections::HashMap::new();
 
             let repathed: Vec<(u64, String, Vec<u8>)> = all_files
                 .drain(..)
@@ -592,6 +613,7 @@ pub fn fix_folder(
                         repath_wad_count += 1;
                         new_path_set.push(final_path.to_lowercase());
                         let new_hash = wad_path_hash(&final_path);
+                        hash_renames.insert(hash, (new_hash, final_path.clone()));
                         (new_hash, final_path, bytes)
                     } else {
                         (hash, path, bytes)
@@ -600,10 +622,20 @@ pub fn fix_folder(
                 .collect();
             all_files = repathed;
 
+            let file_hashes_rewritten =
+                rewrite_file_hash_refs(&mut all_files, &hash_renames, &bin_provider);
+            if file_hashes_rewritten > 0 {
+                ui.fix_applied(
+                    "Updated file-hash reference(s) to repathed chunks",
+                    Some(file_hashes_rewritten),
+                );
+            }
+
             tracing::info!(
-                "  {} string(s) in {} BIN(s) repathed; {} WAD entry/entries renamed; \
-                 {} pulled from game WAD",
+                "  {} string(s) + {} file hash(es) in {} BIN(s) repathed; \
+                 {} WAD entry/entries renamed; {} pulled from game WAD",
                 repath_bin_count,
+                file_hashes_rewritten,
                 bins_touched,
                 repath_wad_count,
                 game_files_added
@@ -759,6 +791,72 @@ pub fn fix_folder(
     Ok(total_result)
 }
 
+/// Everything the mod's BINs reference, for `remove_file` rules with
+/// `unless_referenced`: lowercased path strings (assets + `linked:` deps,
+/// VO included) and xxh64 `file` hash values.
+pub fn collect_referenced_assets(
+    all_files: &[(u64, String, Vec<u8>)],
+    bin_provider: &FileBinProvider,
+) -> hematite_core::wad_pipeline::ReferencedAssets {
+    use hematite_core::traits::BinProvider;
+    let mut out = hematite_core::wad_pipeline::ReferencedAssets::default();
+    for (_, path, bytes) in all_files {
+        let is_bin = path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
+        if !is_bin {
+            continue;
+        }
+        let Ok(tree) = bin_provider.parse_bytes(bytes) else {
+            continue;
+        };
+        out.paths
+            .extend(repath_core::collect_bin_asset_paths(&tree, false));
+        out.hashes
+            .extend(repath_core::collect_bin_asset_hashes(&tree));
+    }
+    out
+}
+
+/// Rewrite xxh64 `file` references in every BIN after WAD entries moved.
+/// `renames` maps `old_entry_hash` → `(new_entry_hash, new_path)`. This is
+/// the hash-typed twin of the string repath: hand-migrated mods reference
+/// chunks by `file` hash, and moving the chunk without updating the hash
+/// leaves the reference dangling (the "repathed animations crash" bug).
+pub fn rewrite_file_hash_refs(
+    all_files: &mut [(u64, String, Vec<u8>)],
+    renames: &std::collections::HashMap<u64, (u64, String)>,
+    bin_provider: &FileBinProvider,
+) -> u32 {
+    use hematite_core::traits::BinProvider;
+    if renames.is_empty() {
+        return 0;
+    }
+    let mut total = 0u32;
+    for (_, path, bytes) in all_files.iter_mut() {
+        let is_bin = path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
+        if !is_bin {
+            continue;
+        }
+        let Ok(mut tree) = bin_provider.parse_bytes(bytes) else {
+            continue;
+        };
+        let n = repath_core::rewrite_bin_file_hashes(&mut tree, renames);
+        if n == 0 {
+            continue;
+        }
+        match bin_provider.write_bytes(&tree) {
+            Ok(new_bytes) => {
+                *bytes = new_bytes;
+                total += n;
+            }
+            Err(e) => tracing::warn!("Failed to write hash-rewritten BIN {}: {}", path, e),
+        }
+    }
+    if total > 0 {
+        tracing::info!("Rewrote {total} file-hash reference(s) to renamed chunks");
+    }
+    total
+}
+
 /// Repair pre-idempotency double-fix damage: collapse stacked repath
 /// prefixes (`assets/hematite/hematite/…`) on chunk paths and BIN strings
 /// back to the single-prefix form, so the `file` hashes retyped on the first
@@ -867,6 +965,12 @@ pub fn dedupe_stacked_prefixes(
         }
     }
 
+    let hash_renames: std::collections::HashMap<u64, (u64, String)> = rename
+        .iter()
+        .map(|(old, new)| (wad_path_hash(old), (wad_path_hash(new), new.clone())))
+        .collect();
+    changes += rewrite_file_hash_refs(all_files, &hash_renames, bin_provider);
+
     if changes > 0 {
         tracing::info!("Collapsed stacked repath prefix on {changes} path(s)/string(s)");
     }
@@ -963,123 +1067,6 @@ pub fn apply_post_repath_fixes(
         total.merge(result);
     }
     total
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{dedupe_stacked_prefixes, fixed_wad_output_path};
-    use hematite_core::traits::BinProvider;
-    use hematite_file::bin_adapter::FileBinProvider;
-    use hematite_file::wad_adapter::wad_path_hash;
-    use hematite_types::bin::{BinObject, BinProperty, BinTree, PropertyValue};
-    use hematite_types::hash::{FieldHash, PathHash, TypeHash};
-    use indexmap::IndexMap;
-    use std::path::Path;
-
-    fn bin_with_strings(strings: &[&str]) -> Vec<u8> {
-        let mut properties = IndexMap::new();
-        for (i, s) in strings.iter().enumerate() {
-            properties.insert(
-                i as u32,
-                BinProperty {
-                    name_hash: FieldHash(i as u32),
-                    value: PropertyValue::String((*s).to_string()),
-                },
-            );
-        }
-        let mut objects = IndexMap::new();
-        objects.insert(
-            1,
-            BinObject {
-                class_hash: TypeHash(2),
-                path_hash: PathHash(1),
-                properties,
-            },
-        );
-        FileBinProvider
-            .write_bytes(&BinTree {
-                objects,
-                ..Default::default()
-            })
-            .unwrap()
-    }
-
-    fn strings_of(bytes: &[u8]) -> Vec<String> {
-        let tree = FileBinProvider.parse_bytes(bytes).unwrap();
-        tree.objects
-            .values()
-            .flat_map(|o| o.properties.values())
-            .filter_map(|p| match &p.value {
-                PropertyValue::String(s) => Some(s.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn dedupe_repairs_double_fix_damage() {
-        // The exact damage shape from the field: chunk + one string carry the
-        // stacked prefix, while a file hash from the first fix still points
-        // at the single-prefix path.
-        let double = "assets/hematite/hematite/sirdexal/icons/travis_square.tex";
-        let single = "assets/hematite/sirdexal/icons/travis_square.tex";
-        let mut all_files = vec![
-            (wad_path_hash(double), double.to_string(), vec![1, 2, 3]),
-            (
-                wad_path_hash("data/characters/x/skins/skin0.bin"),
-                "data/characters/x/skins/skin0.bin".to_string(),
-                bin_with_strings(&[double, "assets/characters/x/ok.tex"]),
-            ),
-        ];
-
-        let changes = dedupe_stacked_prefixes(&mut all_files, "hematite", &FileBinProvider);
-        assert_eq!(changes, 2, "one chunk rename + one string rewrite");
-        assert_eq!(all_files[0].1, single);
-        assert_eq!(all_files[0].0, wad_path_hash(single));
-        assert_eq!(
-            strings_of(&all_files[1].2),
-            vec![single.to_string(), "assets/characters/x/ok.tex".to_string()]
-        );
-    }
-
-    #[test]
-    fn dedupe_keeps_stacked_chunk_when_target_exists() {
-        let double = "assets/hematite/hematite/x.tex";
-        let single = "assets/hematite/x.tex";
-        let mut all_files = vec![
-            (wad_path_hash(double), double.to_string(), vec![1]),
-            (wad_path_hash(single), single.to_string(), vec![2]),
-            (
-                wad_path_hash("data/characters/x/skins/skin0.bin"),
-                "data/characters/x/skins/skin0.bin".to_string(),
-                bin_with_strings(&[double]),
-            ),
-        ];
-
-        dedupe_stacked_prefixes(&mut all_files, "hematite", &FileBinProvider);
-        assert_eq!(all_files[0].1, double, "collision target keeps its path");
-        assert_eq!(
-            strings_of(&all_files[2].2),
-            vec![double.to_string()],
-            "string stays consistent with the kept chunk"
-        );
-    }
-
-    #[test]
-    fn fixed_wad_name_keeps_single_wad_client_suffix() {
-        assert_eq!(
-            fixed_wad_output_path(Path::new("mods/Aatrox.wad.client")),
-            Path::new("mods/Aatrox.fixed.wad.client")
-        );
-        assert_eq!(
-            fixed_wad_output_path(Path::new("Kayn.WAD.CLIENT")),
-            Path::new("Kayn.fixed.wad.client")
-        );
-        assert_eq!(
-            fixed_wad_output_path(Path::new("loose_folder")),
-            Path::new("loose_folder.fixed")
-        );
-    }
 }
 
 /// Prime the live `GameIndex` with each seed champion's base WAD plus any
@@ -1249,5 +1236,197 @@ pub fn run_combo_bin_relocate(
     match game_hashes {
         Some(hashes) => crate::combo_relocate::relocate_combo_bins(all_files, &hashes),
         None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dedupe_stacked_prefixes, fixed_wad_output_path, rewrite_file_hash_refs};
+    use hematite_core::traits::BinProvider;
+    use hematite_file::bin_adapter::FileBinProvider;
+    use hematite_file::wad_adapter::wad_path_hash;
+    use hematite_types::bin::{BinObject, BinProperty, BinTree, PropertyValue};
+    use hematite_types::hash::{FieldHash, PathHash, TypeHash};
+    use indexmap::IndexMap;
+    use std::path::Path;
+
+    fn bin_with_strings(strings: &[&str]) -> Vec<u8> {
+        let mut properties = IndexMap::new();
+        for (i, s) in strings.iter().enumerate() {
+            properties.insert(
+                i as u32,
+                BinProperty {
+                    name_hash: FieldHash(i as u32),
+                    value: PropertyValue::String((*s).to_string()),
+                },
+            );
+        }
+        let mut objects = IndexMap::new();
+        objects.insert(
+            1,
+            BinObject {
+                class_hash: TypeHash(2),
+                path_hash: PathHash(1),
+                properties,
+            },
+        );
+        FileBinProvider
+            .write_bytes(&BinTree {
+                objects,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn strings_of(bytes: &[u8]) -> Vec<String> {
+        let tree = FileBinProvider.parse_bytes(bytes).unwrap();
+        tree.objects
+            .values()
+            .flat_map(|o| o.properties.values())
+            .filter_map(|p| match &p.value {
+                PropertyValue::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dedupe_repairs_double_fix_damage() {
+        // The exact damage shape from the field: chunk + one string carry the
+        // stacked prefix, while a file hash from the first fix still points
+        // at the single-prefix path.
+        let double = "assets/hematite/hematite/sirdexal/icons/travis_square.tex";
+        let single = "assets/hematite/sirdexal/icons/travis_square.tex";
+        let mut all_files = vec![
+            (wad_path_hash(double), double.to_string(), vec![1, 2, 3]),
+            (
+                wad_path_hash("data/characters/x/skins/skin0.bin"),
+                "data/characters/x/skins/skin0.bin".to_string(),
+                bin_with_strings(&[double, "assets/characters/x/ok.tex"]),
+            ),
+        ];
+
+        let changes = dedupe_stacked_prefixes(&mut all_files, "hematite", &FileBinProvider);
+        assert_eq!(changes, 2, "one chunk rename + one string rewrite");
+        assert_eq!(all_files[0].1, single);
+        assert_eq!(all_files[0].0, wad_path_hash(single));
+        assert_eq!(
+            strings_of(&all_files[1].2),
+            vec![single.to_string(), "assets/characters/x/ok.tex".to_string()]
+        );
+    }
+
+    #[test]
+    fn dedupe_keeps_stacked_chunk_when_target_exists() {
+        let double = "assets/hematite/hematite/x.tex";
+        let single = "assets/hematite/x.tex";
+        let mut all_files = vec![
+            (wad_path_hash(double), double.to_string(), vec![1]),
+            (wad_path_hash(single), single.to_string(), vec![2]),
+            (
+                wad_path_hash("data/characters/x/skins/skin0.bin"),
+                "data/characters/x/skins/skin0.bin".to_string(),
+                bin_with_strings(&[double]),
+            ),
+        ];
+
+        dedupe_stacked_prefixes(&mut all_files, "hematite", &FileBinProvider);
+        assert_eq!(all_files[0].1, double, "collision target keeps its path");
+        assert_eq!(
+            strings_of(&all_files[2].2),
+            vec![double.to_string()],
+            "string stays consistent with the kept chunk"
+        );
+    }
+
+    fn bin_with_file_hash(h: u64) -> Vec<u8> {
+        let mut properties = IndexMap::new();
+        properties.insert(
+            1,
+            BinProperty {
+                name_hash: FieldHash(1),
+                value: PropertyValue::WadHash(h),
+            },
+        );
+        let mut objects = IndexMap::new();
+        objects.insert(
+            1,
+            BinObject {
+                class_hash: TypeHash(2),
+                path_hash: PathHash(1),
+                properties,
+            },
+        );
+        FileBinProvider
+            .write_bytes(&BinTree {
+                objects,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn file_hashes_of(bytes: &[u8]) -> Vec<u64> {
+        let tree = FileBinProvider.parse_bytes(bytes).unwrap();
+        hematite_core::repath::collect_bin_asset_hashes(&tree)
+    }
+
+    #[test]
+    fn rewrite_file_hash_refs_follows_chunk_renames() {
+        let old = "assets/rengar_custom/animations/attack1.anm";
+        let new = "assets/hematite/rengar_custom/animations/attack1.anm";
+        let mut all_files = vec![
+            (
+                wad_path_hash("data/characters/rengar/skins/skin32.bin"),
+                "data/characters/rengar/skins/skin32.bin".to_string(),
+                bin_with_file_hash(wad_path_hash(old)),
+            ),
+            (wad_path_hash(new), new.to_string(), vec![1, 2, 3]),
+        ];
+        let renames: std::collections::HashMap<u64, (u64, String)> =
+            [(wad_path_hash(old), (wad_path_hash(new), new.to_string()))]
+                .into_iter()
+                .collect();
+
+        let n = rewrite_file_hash_refs(&mut all_files, &renames, &FileBinProvider);
+        assert_eq!(n, 1);
+        assert_eq!(file_hashes_of(&all_files[0].2), vec![wad_path_hash(new)]);
+
+        let n2 = rewrite_file_hash_refs(&mut all_files, &renames, &FileBinProvider);
+        assert_eq!(n2, 0, "second run must be a no-op");
+    }
+
+    #[test]
+    fn dedupe_rewrites_file_hashes_on_stacked_chunks() {
+        let double = "assets/hematite/hematite/sirdexal/icons/travis_square.tex";
+        let single = "assets/hematite/sirdexal/icons/travis_square.tex";
+        let mut all_files = vec![
+            (wad_path_hash(double), double.to_string(), vec![1, 2, 3]),
+            (
+                wad_path_hash("data/characters/x/skins/skin0.bin"),
+                "data/characters/x/skins/skin0.bin".to_string(),
+                bin_with_file_hash(wad_path_hash(double)),
+            ),
+        ];
+
+        let changes = dedupe_stacked_prefixes(&mut all_files, "hematite", &FileBinProvider);
+        assert_eq!(changes, 2, "one chunk rename + one hash rewrite");
+        assert_eq!(all_files[0].1, single);
+        assert_eq!(file_hashes_of(&all_files[1].2), vec![wad_path_hash(single)]);
+    }
+
+    #[test]
+    fn fixed_wad_name_keeps_single_wad_client_suffix() {
+        assert_eq!(
+            fixed_wad_output_path(Path::new("mods/Aatrox.wad.client")),
+            Path::new("mods/Aatrox.fixed.wad.client")
+        );
+        assert_eq!(
+            fixed_wad_output_path(Path::new("Kayn.WAD.CLIENT")),
+            Path::new("Kayn.fixed.wad.client")
+        );
+        assert_eq!(
+            fixed_wad_output_path(Path::new("loose_folder")),
+            Path::new("loose_folder.fixed")
+        );
     }
 }

@@ -1,5 +1,5 @@
-version = "2.3.1"
-last_updated = "2026-08-21"
+version = "2.3.2"
+last_updated = "2026-08-22"
 
 enabled_fixes = [
     "file_ref_migration",
@@ -385,7 +385,7 @@ converter = "sco_to_scb"
 
 [wad_fixes.anm_remover]
 name = "Animation File Remover"
-description = "Removes .anm animation files to prevent conflicts with newer patches"
+description = "Removes .anm animation files the mod's BINs no longer reference (by path or file hash) to prevent conflicts with newer patches"
 severity = "low"
 
 [wad_fixes.anm_remover.detect]
@@ -394,6 +394,7 @@ extension = ".anm"
 
 [wad_fixes.anm_remover.apply]
 type = "remove_file"
+unless_referenced = true
 
 [wad_fixes.strip_mipmaps_tex]
 name = "Strip Mipmaps (TEX)"

@@ -485,9 +485,14 @@ pub enum Endian {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WadTransformAction {
-    /// Remove the file from WAD.
+    /// Remove the file from WAD. With `unless_referenced`, files the mod's
+    /// own BINs still point at (by path string OR xxh64 `file` hash) are
+    /// kept — only unreferenced bloat is removed.
     #[serde(rename = "remove_file")]
-    RemoveFile,
+    RemoveFile {
+        #[serde(default)]
+        unless_referenced: bool,
+    },
 
     /// Convert file format (e.g. DDS→TEX, SCO→SCB).
     #[serde(rename = "convert_format")]

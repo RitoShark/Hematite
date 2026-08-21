@@ -414,7 +414,7 @@ mod tests {
 
         let config = load_repo_config();
 
-        assert_eq!(config.version, "2.3.1");
+        assert_eq!(config.version, "2.3.2");
 
         // The central enable list is the single authority — spot-check both
         // directions plus a WAD-level entry.
@@ -553,6 +553,22 @@ mod tests {
                 }
             }
             other => panic!("resolve_dead_refs.apply: expected ResolveDeadRefs, got {other:?}"),
+        }
+
+        // anm_remover: reference-aware removal — only .anm files the mod's
+        // BINs no longer point at (by string or file hash) are bloat.
+        let anm_remover = config
+            .wad_fixes
+            .get("anm_remover")
+            .expect("anm_remover rule missing");
+        match &anm_remover.apply {
+            WadTransformAction::RemoveFile { unless_referenced } => {
+                assert!(
+                    unless_referenced,
+                    "anm_remover must keep referenced animations"
+                );
+            }
+            other => panic!("anm_remover.apply: expected RemoveFile, got {other:?}"),
         }
 
         // combo_bin_relocate: descriptor-only wad_fixes entry. The pipeline

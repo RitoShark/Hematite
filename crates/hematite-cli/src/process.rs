@@ -519,11 +519,25 @@ fn process_wad_file(
     // Run file-level fixes (BNK removal, format conversions, etc.)
     ctx.ui.stage("Detecting WAD-level issues…");
     tracing::debug!("Running WAD-level pipeline...");
-    let wad_output =
-        wad_pipeline::apply_wad_fixes(&all_files, config, selected_fixes, hash_provider.as_ref())?;
+    let referenced =
+        hematite_orchestrate::fix_folder::collect_referenced_assets(&all_files, &bin_provider);
+    let wad_output = wad_pipeline::apply_wad_fixes(
+        &all_files,
+        config,
+        selected_fixes,
+        hash_provider.as_ref(),
+        &referenced,
+    )?;
 
     // Collect files to remove from WAD-level fixes
     shared_files_to_remove.extend(wad_output.files_to_remove.clone());
+    // Drop removed entries NOW: repath renames paths later, and a rename
+    // would make the rebuild-time path filter silently miss the removal.
+    if !dry_run && !wad_output.files_to_remove.is_empty() {
+        let removed: std::collections::HashSet<&String> =
+            wad_output.files_to_remove.iter().collect();
+        all_files.retain(|(_, p, _)| !removed.contains(p));
+    }
 
     // Track WAD-level fixes applied
     for wad_fix in &wad_output.applied_fixes {
@@ -614,15 +628,12 @@ fn process_wad_file(
         total_result.fixes_applied += conversion_count;
     }
 
-    // Perform in-place byte transforms (mipmap strip, dimension fix, ...).
-    // Same converter registry as `files_to_convert`; the only difference is
-    // we don't touch paths/extensions.
-    let mut transform_count = 0u32;
+    // In-place byte transforms (mipmap strip, dimension fix, ...). Same
+    // converter registry as `files_to_convert`; the only difference is we
+    // don't touch paths/extensions. Only files the converter actually
+    // changed are counted/reported — an extension match alone is not a fix.
     if !wad_output.files_to_transform.is_empty() {
-        tracing::info!(
-            "Applying {} in-place byte transforms...",
-            wad_output.files_to_transform.len()
-        );
+        let mut per_fix: std::collections::BTreeMap<String, (String, u32)> = Default::default();
         for op in &wad_output.files_to_transform {
             if let Some((_, _, bytes)) = all_files.iter_mut().find(|(_, p, _)| p == &op.path) {
                 match converter_registry.convert(&op.converter, bytes) {
@@ -635,8 +646,13 @@ fn process_wad_file(
                                 bytes.len(),
                                 new_bytes.len()
                             );
-                            *bytes = new_bytes;
-                            transform_count += 1;
+                            if !dry_run {
+                                *bytes = new_bytes;
+                            }
+                            per_fix
+                                .entry(op.fix_id.clone())
+                                .or_insert_with(|| (op.fix_name.clone(), 0))
+                                .1 += 1;
                         } else {
                             tracing::debug!(
                                 "{} via {}: no change emitted (likely a no-op)",
@@ -656,7 +672,10 @@ fn process_wad_file(
                 }
             }
         }
-        total_result.fixes_applied += transform_count;
+        for (fix_name, count) in per_fix.values() {
+            ctx.ui.fix_applied(fix_name, Some(*count));
+            total_result.fixes_applied += count;
+        }
     }
 
     // Append injected files (fallback textures, placeholder assets, ...).
@@ -1022,6 +1041,8 @@ fn process_wad_file(
             let mut new_path_set: Vec<String> = Vec::new();
             let mut seen_dest: std::collections::HashMap<String, u32> =
                 std::collections::HashMap::new();
+            let mut hash_renames: std::collections::HashMap<u64, (u64, String)> =
+                std::collections::HashMap::new();
 
             let repathed: Vec<(u64, String, Vec<u8>)> = all_files
                 .drain(..)
@@ -1060,6 +1081,7 @@ fn process_wad_file(
                         repath_wad_count += 1;
                         new_path_set.push(final_path.to_lowercase());
                         let new_hash = wad_path_hash(&final_path);
+                        hash_renames.insert(hash, (new_hash, final_path.clone()));
                         (new_hash, final_path, bytes)
                     } else {
                         (hash, path, bytes)
@@ -1068,10 +1090,23 @@ fn process_wad_file(
                 .collect();
             all_files = repathed;
 
+            let file_hashes_rewritten = hematite_orchestrate::fix_folder::rewrite_file_hash_refs(
+                &mut all_files,
+                &hash_renames,
+                &bin_provider,
+            );
+            if file_hashes_rewritten > 0 {
+                ui.fix_applied(
+                    "Updated file-hash reference(s) to repathed chunks",
+                    Some(file_hashes_rewritten),
+                );
+            }
+
             tracing::info!(
-                "  {} string(s) in {} BIN(s) repathed; {} WAD entry/entries renamed; \
-                 {} pulled from game WAD",
+                "  {} string(s) + {} file hash(es) in {} BIN(s) repathed; \
+                 {} WAD entry/entries renamed; {} pulled from game WAD",
                 repath_bin_count,
+                file_hashes_rewritten,
                 bins_touched,
                 repath_wad_count,
                 game_files_added

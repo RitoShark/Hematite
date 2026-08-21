@@ -8,7 +8,9 @@ use hematite_types::config::WadTransformAction;
 /// Result of applying a WAD transform action.
 #[derive(Debug, Clone)]
 pub enum ActionResult {
-    RemoveFile,
+    RemoveFile {
+        unless_referenced: bool,
+    },
     ConvertFile {
         from_ext: String,
         to_ext: String,
@@ -31,7 +33,9 @@ pub fn apply_action(
     action: &WadTransformAction,
 ) -> Result<ActionResult> {
     match action {
-        WadTransformAction::RemoveFile => Ok(ActionResult::RemoveFile),
+        WadTransformAction::RemoveFile { unless_referenced } => Ok(ActionResult::RemoveFile {
+            unless_referenced: *unless_referenced,
+        }),
 
         WadTransformAction::ConvertFormat {
             from_ext,

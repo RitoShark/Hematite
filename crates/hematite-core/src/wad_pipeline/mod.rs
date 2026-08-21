@@ -35,6 +35,21 @@ pub struct WadFixResult {
     pub files_affected: u32,
 }
 
+/// Everything the mod's own BINs point at: lowercased path strings (asset
+/// refs + `linked:` deps) and xxh64 `file` hashes. `remove_file` rules with
+/// `unless_referenced` keep any file that appears here.
+#[derive(Debug, Default, Clone)]
+pub struct ReferencedAssets {
+    pub paths: std::collections::HashSet<String>,
+    pub hashes: std::collections::HashSet<u64>,
+}
+
+impl ReferencedAssets {
+    pub fn contains(&self, path: &str, hash: u64) -> bool {
+        self.hashes.contains(&hash) || self.paths.contains(&path.to_lowercase().replace('\\', "/"))
+    }
+}
+
 /// Apply WAD-level fixes to a list of files.
 ///
 /// Returns a list of file operations to perform (remove, convert, rename).
@@ -43,6 +58,7 @@ pub fn apply_wad_fixes(
     config: &FixConfig,
     selected_fix_ids: &[String],
     hash_provider: &dyn HashProvider,
+    referenced: &ReferencedAssets,
 ) -> Result<WadFixOutput> {
     let mut output = WadFixOutput::default();
 
@@ -55,7 +71,7 @@ pub fn apply_wad_fixes(
             continue;
         }
 
-        let result = apply_single_fix(files, fix_rule, fix_id, hash_provider)?;
+        let result = apply_single_fix(files, fix_rule, fix_id, hash_provider, referenced)?;
         output.merge(result);
     }
 
@@ -93,6 +109,8 @@ pub struct FileConversion {
 pub struct InPlaceTransform {
     pub path: String,
     pub converter: String,
+    pub fix_id: String,
+    pub fix_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +139,7 @@ fn apply_single_fix(
     fix_rule: &WadFixRule,
     fix_id: &str,
     _hash_provider: &dyn HashProvider,
+    referenced: &ReferencedAssets,
 ) -> Result<WadFixOutput> {
     let mut output = WadFixOutput::default();
     let mut files_affected = 0u32;
@@ -167,14 +186,18 @@ fn apply_single_fix(
         _ => {}
     }
 
-    for (_, path, bytes) in files {
+    for (hash, path, bytes) in files {
         // Check if this file matches the detection rule
         if detect::check_file(path, bytes, &fix_rule.detect)? {
             // Apply the transform action
             let action_result = transform::apply_action(path, bytes, &fix_rule.apply)?;
 
             match action_result {
-                transform::ActionResult::RemoveFile => {
+                transform::ActionResult::RemoveFile { unless_referenced } => {
+                    if unless_referenced && referenced.contains(path, *hash) {
+                        tracing::debug!("Keeping {} (still referenced by the mod's BINs)", path);
+                        continue;
+                    }
                     output.files_to_remove.push(path.clone());
                     files_affected += 1;
                 }
@@ -205,12 +228,14 @@ fn apply_single_fix(
                         files_affected += 1;
                     }
                 }
+                // No files_affected here: the caller counts only files the converter actually changed.
                 transform::ActionResult::TransformInPlace { converter } => {
                     output.files_to_transform.push(InPlaceTransform {
                         path: path.clone(),
                         converter,
+                        fix_id: fix_id.to_string(),
+                        fix_name: fix_rule.name.clone(),
                     });
-                    files_affected += 1;
                 }
                 transform::ActionResult::RenameFile { new_path } => {
                     output.files_to_rename.push((path.clone(), new_path));
@@ -230,4 +255,89 @@ fn apply_single_fix(
     }
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hematite_types::config::WadDetectionRule;
+    use hematite_types::hash::{FieldHash, GameHash, PathHash, TypeHash};
+
+    struct NoHashes;
+    impl HashProvider for NoHashes {
+        fn resolve_type(&self, _: TypeHash) -> Option<&str> {
+            None
+        }
+        fn resolve_field(&self, _: FieldHash) -> Option<&str> {
+            None
+        }
+        fn resolve_entry(&self, _: PathHash) -> Option<&str> {
+            None
+        }
+        fn resolve_game_path(&self, _: GameHash) -> Option<&str> {
+            None
+        }
+        fn type_hash(&self, _: &str) -> Option<TypeHash> {
+            None
+        }
+        fn field_hash(&self, _: &str) -> Option<FieldHash> {
+            None
+        }
+        fn has_game_path(&self, _: &str) -> bool {
+            false
+        }
+        fn is_loaded(&self) -> bool {
+            false
+        }
+    }
+
+    fn anm_rule(unless_referenced: bool) -> WadFixRule {
+        WadFixRule {
+            name: "Animation File Remover".to_string(),
+            description: String::new(),
+            enabled: true,
+            severity: "low".to_string(),
+            detect: WadDetectionRule::FileExtension {
+                extension: ".anm".to_string(),
+                binary_check: None,
+                exclude_files: Vec::new(),
+            },
+            apply: WadTransformAction::RemoveFile { unless_referenced },
+        }
+    }
+
+    #[test]
+    fn remove_file_unless_referenced_keeps_referenced_files() {
+        let by_string = "assets/x/animations/by_string.anm";
+        let by_hash = "assets/x/animations/by_hash.anm";
+        let bloat = "assets/x/animations/bloat.anm";
+        let files: Vec<(u64, String, Vec<u8>)> = vec![
+            (1, by_string.to_string(), vec![0]),
+            (0xF11E, by_hash.to_string(), vec![0]),
+            (3, bloat.to_string(), vec![0]),
+        ];
+        let mut referenced = ReferencedAssets::default();
+        referenced.paths.insert(by_string.to_string());
+        referenced.hashes.insert(0xF11E);
+
+        let out = apply_single_fix(
+            &files,
+            &anm_rule(true),
+            "anm_remover",
+            &NoHashes,
+            &referenced,
+        )
+        .unwrap();
+        assert_eq!(out.files_to_remove, vec![bloat.to_string()]);
+
+        let out = apply_single_fix(
+            &files,
+            &anm_rule(false),
+            "anm_remover",
+            &NoHashes,
+            &referenced,
+        )
+        .unwrap();
+        assert_eq!(out.files_to_remove.len(), 3);
+    }
 }
