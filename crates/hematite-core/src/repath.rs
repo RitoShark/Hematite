@@ -162,7 +162,7 @@ pub fn collapse_stacked_prefix(path: &str, prefix: &str) -> Option<String> {
         }
         let next = &rest[full_seg.len()..];
         let next_is_full_prefix_seg = next.starts_with(&full_seg)
-            || (next.starts_with(&pl) && next[pl.len()..].chars().next() == Some('/'));
+            || (next.starts_with(&pl) && next[pl.len()..].starts_with('/'));
         let next_is_concat_stack = next.starts_with(&pl) && next[pl.len()..].starts_with(&pl);
         if next_is_full_prefix_seg || next_is_concat_stack {
             cut += full_seg.len();
