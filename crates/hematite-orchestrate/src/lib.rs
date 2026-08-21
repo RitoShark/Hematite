@@ -12,6 +12,7 @@ pub mod list_fixes;
 pub mod live_provider;
 pub mod options;
 pub mod progress;
+pub mod skinlite;
 
 pub use fix_folder::fix_folder;
 pub use game_access::GameFileAccess;

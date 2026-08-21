@@ -105,6 +105,19 @@ pub fn fix_folder(
         }
     }
 
+    // === PRE-APPLIED SKINLITE ===
+    // Verified skin0 clones leave the working set here and are regenerated
+    // from the fixed skin0 just before the rebuild — fixing one BIN instead
+    // of ~99 identical ones.
+    let skinlite_sets = crate::skinlite::detect_and_strip(&mut all_files, &bin_provider);
+    for set in &skinlite_sets {
+        progress.note(&format!(
+            "SkinLite detected on {}: fixing skin0 once, recloning {} slot(s) after",
+            set.champ,
+            set.slots.len()
+        ));
+    }
+
     let path_hashes: std::collections::HashSet<u64> =
         all_files.iter().map(|(h, _, _)| *h).collect();
     let wad_provider = FileWadProvider::from_hashes(path_hashes);
@@ -627,6 +640,12 @@ pub fn fix_folder(
             progress,
         );
         total_result.merge(post_result);
+    }
+
+    // === SKINLITE RECLONE ===
+    if !dry_run && !skinlite_sets.is_empty() {
+        let recloned = crate::skinlite::reclone(&mut all_files, &skinlite_sets, &bin_provider);
+        tracing::info!("SkinLite: recloned {recloned} slot bin(s) from fixed skin0");
     }
 
     if check {

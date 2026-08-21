@@ -31,6 +31,7 @@ pub mod filter;
 pub mod pipeline;
 pub mod repath;
 pub mod seeds;
+pub mod skinlite;
 pub mod strings;
 pub mod traits;
 pub mod transform;

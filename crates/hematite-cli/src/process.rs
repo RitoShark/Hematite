@@ -432,6 +432,19 @@ fn process_wad_file(
         }
     }
 
+    // === PRE-APPLIED SKINLITE ===
+    // Verified skin0 clones leave the working set here and are regenerated
+    // from the fixed skin0 just before the rebuild.
+    let skinlite_sets =
+        hematite_orchestrate::skinlite::detect_and_strip(&mut all_files, &bin_provider);
+    for set in &skinlite_sets {
+        ctx.ui.note(&format!(
+            "SkinLite detected on {}: fixing skin0 once, recloning {} slot(s) after",
+            set.champ,
+            set.slots.len()
+        ));
+    }
+
     // Identify BIN entries by content magic, not just by path extension —
     // mods commonly ship BINs whose path-hash isn't in the dictionary, in
     // which case the resolved "path" is a hex string and the `.bin` filter
@@ -1111,6 +1124,13 @@ fn process_wad_file(
             &sink,
         );
         total_result.merge(post_result);
+    }
+
+    // === SKINLITE RECLONE ===
+    if !dry_run && !skinlite_sets.is_empty() {
+        let recloned =
+            hematite_orchestrate::skinlite::reclone(&mut all_files, &skinlite_sets, &bin_provider);
+        tracing::info!("SkinLite: recloned {recloned} slot bin(s) from fixed skin0");
     }
 
     // In check mode, populate CheckInfo with skin detection
