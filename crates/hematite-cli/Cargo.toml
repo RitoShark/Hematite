@@ -34,6 +34,7 @@ indicatif = "0.17"
 zip = "0.6"
 tempfile = "3.10"
 walkdir = "2"
+ltk_modpkg = "0.6"
 
 # Remote config fetching
 reqwest = { version = "0.12", features = ["blocking", "json"] }

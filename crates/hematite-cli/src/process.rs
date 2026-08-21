@@ -214,7 +214,11 @@ fn is_supported_file(path: &Path) -> bool {
         .map(|n| n.to_lowercase())
         .unwrap_or_default();
 
-    ext == "bin" || ext == "fantome" || ext == "zip" || file_name.ends_with(".wad.client")
+    ext == "bin"
+        || ext == "fantome"
+        || ext == "zip"
+        || ext == "modpkg"
+        || file_name.ends_with(".wad.client")
 }
 
 /// Process a single file based on its type (with hash provider).
@@ -245,6 +249,8 @@ fn process_file_with_hashes(
         }
     } else if ext == "fantome" || ext == "zip" {
         process_fantome_file(file, ctx, hash_provider)
+    } else if ext == "modpkg" {
+        process_modpkg_file(file, ctx, hash_provider)
     } else {
         anyhow::bail!("Unsupported file type: {}", file.display());
     }
@@ -1242,6 +1248,277 @@ fn process_wad_folder(
         &opts,
         &sink,
     )
+}
+
+/// Process a .modpkg mod package.
+///
+/// Mounts the package, extracts every layer's chunks into per-WAD folders,
+/// runs the standard folder pipeline on each, then rebuilds the package with
+/// the fixed chunks — metadata, readme, thumbnail, layers and WAD
+/// associations preserved. Output uses the canonical convention (WAD table +
+/// game paths); legacy `X.wad.client/`-prefixed chunk paths are normalized.
+fn process_modpkg_file(
+    file: &Path,
+    ctx: &ProcessContext<'_>,
+    hash_provider: &Arc<dyn HashProvider>,
+) -> Result<ProcessResult> {
+    use ltk_modpkg::builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder};
+    use ltk_modpkg::{Modpkg, ModpkgCompression};
+
+    const NO_INDEX: u32 = 0xffffffff;
+
+    let dry_run = ctx.dry_run;
+    tracing::info!("Processing modpkg: {}", file.display());
+
+    let source = std::fs::File::open(file).context("Failed to open modpkg")?;
+    let mut modpkg = Modpkg::mount_from_reader(source)
+        .map_err(|e| anyhow::anyhow!("Failed to mount modpkg: {e}"))?;
+
+    let metadata = modpkg.load_metadata().ok();
+    let thumbnail = modpkg.load_thumbnail().ok();
+    let readme = modpkg
+        .load_readme()
+        .ok()
+        .and_then(|b| String::from_utf8(b.to_vec()).ok());
+    let mut layers: Vec<ltk_modpkg::ModpkgLayer> = modpkg
+        .layer_indices
+        .iter()
+        .filter_map(|h| modpkg.layers.get(h))
+        .cloned()
+        .collect();
+    if layers.is_empty() {
+        layers.push(ltk_modpkg::ModpkgLayer {
+            name: "base".to_string(),
+            priority: 0,
+        });
+    }
+    let layer_folder = |name: &str| {
+        layers
+            .iter()
+            .position(|l| l.name == *name)
+            .map(|i| format!("layer_{i}"))
+            .unwrap_or_else(|| "layer_0".to_string())
+    };
+
+    struct ChunkRec {
+        key: (u64, u64),
+        layer: String,
+        wad: String,
+        rel_path: String,
+    }
+
+    let mut recs: Vec<ChunkRec> = Vec::new();
+    for (key, chunk) in &modpkg.chunks {
+        if chunk.layer_index == NO_INDEX {
+            continue;
+        }
+        let display = modpkg
+            .chunk_path_indices
+            .get(chunk.path_index as usize)
+            .and_then(|h| modpkg.chunk_paths.get(h))
+            .cloned()
+            .unwrap_or_else(|| format!("{:016x}", chunk.path_hash));
+        let display = display.replace('\\', "/");
+        if display.starts_with("_meta_/") {
+            continue;
+        }
+        if display.split('/').any(|c| c == "..") || Path::new(&display).is_absolute() {
+            anyhow::bail!("Invalid modpkg chunk path (potential path traversal): {display}");
+        }
+
+        let layer = modpkg
+            .layer_indices
+            .get(chunk.layer_index as usize)
+            .and_then(|h| modpkg.layers.get(h))
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| "base".to_string());
+
+        let (wad, rel_path) = if chunk.wad_index != NO_INDEX {
+            (
+                modpkg
+                    .wad_name_for_index(chunk.wad_index)
+                    .unwrap_or_default()
+                    .to_string(),
+                display,
+            )
+        } else {
+            match display.split_once('/') {
+                Some((first, rest)) if first.to_lowercase().ends_with(".wad.client") => {
+                    (first.to_string(), rest.to_string())
+                }
+                _ => (String::new(), display),
+            }
+        };
+
+        recs.push(ChunkRec {
+            key: *key,
+            layer,
+            wad,
+            rel_path,
+        });
+    }
+
+    if recs.is_empty() {
+        tracing::warn!("No content chunks found in {}", file.display());
+        return Ok(ProcessResult::default());
+    }
+
+    // Extract each layer's chunks into per-WAD folders the pipeline understands.
+    let temp_dir = tempfile::tempdir().context("Failed to create temp directory")?;
+    let mut wad_folders: std::collections::BTreeSet<std::path::PathBuf> =
+        std::collections::BTreeSet::new();
+
+    for rec in &recs {
+        let wad_folder_name = if rec.wad.is_empty() {
+            "unassigned.wad.client".to_string()
+        } else {
+            rec.wad.clone()
+        };
+        let folder = temp_dir
+            .path()
+            .join(layer_folder(&rec.layer))
+            .join(&wad_folder_name);
+        let dest = folder.join(&rec.rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let bytes = modpkg
+            .load_chunk_decompressed_by_hash(rec.key.0, rec.key.1)
+            .map_err(|e| anyhow::anyhow!("Failed to load modpkg chunk {}: {e}", rec.rel_path))?;
+        std::fs::write(&dest, &bytes).context("Failed to extract modpkg chunk")?;
+        wad_folders.insert(folder);
+    }
+
+    tracing::info!(
+        "Extracted {} chunk(s) into {} WAD folder(s) across {} layer(s)",
+        recs.len(),
+        wad_folders.len(),
+        layers.len().max(1)
+    );
+
+    let mut total_result = ProcessResult::default();
+    for folder in &wad_folders {
+        let result = process_wad_folder(folder, ctx, hash_provider)?;
+        total_result.merge(result);
+    }
+
+    // === MODPKG REPACK ===
+    if !dry_run && total_result.fixes_applied > 0 {
+        let output_path = file.with_extension("fixed.modpkg");
+        tracing::info!("Repacking modpkg...");
+
+        let mut builder = ModpkgBuilder::default();
+        if let Some(md) = metadata {
+            builder = builder
+                .with_metadata(md)
+                .map_err(|e| anyhow::anyhow!("modpkg metadata: {e}"))?;
+        }
+        if let Some(tb) = thumbnail {
+            builder = builder
+                .with_thumbnail(tb.to_vec())
+                .map_err(|e| anyhow::anyhow!("modpkg thumbnail: {e}"))?;
+        }
+        if let Some(rd) = &readme {
+            builder = builder
+                .with_readme(rd)
+                .map_err(|e| anyhow::anyhow!("modpkg readme: {e}"))?;
+        }
+        for layer in &layers {
+            builder = builder
+                .with_layer(ModpkgLayerBuilder::new(&layer.name).with_priority(layer.priority));
+        }
+
+        let mut chunk_data: std::collections::HashMap<(u64, u64), Vec<u8>> =
+            std::collections::HashMap::new();
+
+        for (i, layer) in layers.iter().enumerate() {
+            let layer_dir = temp_dir.path().join(format!("layer_{i}"));
+            if !layer_dir.is_dir() {
+                continue;
+            }
+            for wad_entry in std::fs::read_dir(&layer_dir)? {
+                let wad_dir = wad_entry?.path();
+                if !wad_dir.is_dir() {
+                    continue;
+                }
+                let wad_name = wad_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                // Prefer the pipeline's fixed output folder when it exists.
+                let fixed_dir = wad_dir.with_extension("fixed.wad.client");
+                let source_dir = if fixed_dir.is_dir() {
+                    &fixed_dir
+                } else {
+                    &wad_dir
+                };
+                if wad_name.to_lowercase().ends_with(".fixed.wad.client") {
+                    continue;
+                }
+
+                for entry in WalkDir::new(source_dir) {
+                    let entry = entry?;
+                    if !entry.path().is_file() {
+                        continue;
+                    }
+                    let rel = entry
+                        .path()
+                        .strip_prefix(source_dir)
+                        .context("Failed to strip modpkg repack prefix")?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+
+                    let stem = rel
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&rel)
+                        .split('.')
+                        .next()
+                        .unwrap_or_default();
+                    let mut cb = ModpkgChunkBuilder::new();
+                    cb = if ltk_modpkg::utils::is_hex_chunk_name(stem) {
+                        cb.with_hashed_chunk_name(&rel)
+                            .map_err(|e| anyhow::anyhow!("modpkg chunk {rel}: {e}"))?
+                    } else {
+                        cb.with_path(&rel)
+                            .map_err(|e| anyhow::anyhow!("modpkg chunk {rel}: {e}"))?
+                    };
+                    cb = cb
+                        .with_compression(ModpkgCompression::Zstd)
+                        .with_layer(&layer.name);
+                    if wad_name != "unassigned.wad.client" {
+                        cb = cb.with_wad(&wad_name);
+                    }
+
+                    let bytes = std::fs::read(entry.path())?;
+                    chunk_data.insert(cb.key(), bytes);
+                    builder = builder.with_chunk(cb);
+                }
+            }
+        }
+
+        let out_file =
+            std::fs::File::create(&output_path).context("Failed to create output modpkg")?;
+        let mut out_writer = std::io::BufWriter::new(out_file);
+        builder
+            .build_to_writer(&mut out_writer, |cb, cursor| {
+                let bytes = chunk_data.get(&cb.key()).map(Vec::as_slice).unwrap_or(&[]);
+                std::io::Write::write_all(cursor, bytes)?;
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to build modpkg: {e}"))?;
+
+        ctx.ui
+            .fix_applied(&format!("Wrote {}", output_path.display()), None);
+        tracing::info!("✓ Wrote fixed modpkg to: {}", output_path.display());
+        tracing::info!("  {} total fixes applied", total_result.fixes_applied);
+    } else if !dry_run {
+        ctx.ui.note("No changes detected — modpkg not modified.");
+        tracing::info!("No changes detected - modpkg not modified");
+    }
+
+    Ok(total_result)
 }
 
 /// Process a .fantome or .zip file.
