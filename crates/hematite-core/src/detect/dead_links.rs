@@ -23,6 +23,44 @@ fn parse_hex_hash(hex: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
+/// Bound on game BINs visited while building the defined set — mirrors the
+/// pull transform's `CLOSURE_CAP` so detect and apply see the same world.
+const GAME_CLOSURE_CAP: usize = 64;
+
+/// Highest `skinN` slot probed when reconstructing the multi-skins BIN name.
+const MAX_SKIN_SLOT: u32 = 300;
+
+/// Reconstruct the path of the game's always-loaded multi-skins combo BIN
+/// (`data/characters/{c}/{c}_multi_skins_root_skins_skin0_skins_skin1_….bin`).
+/// Riot names it from every `skins/*.bin` slot the champion ships, joined
+/// with `_skins_` in lexicographic order (`root, skin0, skin1, skin10, …,
+/// skin2, skin20, …`). CAC voiceover entries are typically defined ONLY
+/// here, so missing it makes every base CAC link look dead. The final
+/// `has_path` check makes naming-scheme drift fail open (None).
+fn find_game_multi_skins_bin(
+    game: &dyn crate::traits::GameProvider,
+    champ: &str,
+) -> Option<String> {
+    let mut names: Vec<String> = Vec::new();
+    if game.has_path(&format!("data/characters/{champ}/skins/root.bin")) {
+        names.push("root".to_string());
+    }
+    for n in 0..=MAX_SKIN_SLOT {
+        if game.has_path(&format!("data/characters/{champ}/skins/skin{n}.bin")) {
+            names.push(format!("skin{n}"));
+        }
+    }
+    if names.is_empty() {
+        return None;
+    }
+    names.sort();
+    let path = format!(
+        "data/characters/{champ}/{champ}_multi_skins_{}.bin",
+        names.join("_skins_")
+    );
+    game.has_path(&path).then_some(path)
+}
+
 /// Recursively collect `PropertyValue::Link` hashes found inside properties
 /// whose `name_hash` equals `link_field_hash`, descending into nested
 /// Struct/Embedded/Container/UnorderedContainer/Optional/Map values.
@@ -136,15 +174,43 @@ pub(crate) fn collect_dead_links(
         extend_defined_from_tree(linked_tree, &mut defined);
     }
 
+    // The game side must include the champion base BIN's closure: the game
+    // always loads `data/characters/{champ}/{champ}.bin` alongside the skin
+    // BIN, so links defined there (e.g. base CAC voiceover entries) are
+    // alive at runtime even though no mod file and no `linked:` entry names
+    // them. Dropping those killed voice lines.
     if let Some(game) = ctx.game {
         let mut game_bin_cache: HashMap<String, Option<BinTree>> = HashMap::new();
-        for linked_path in &ctx.tree.linked {
-            let resolved = game_bin_cache
-                .entry(linked_path.clone())
-                .or_insert_with(|| game.game_bin(linked_path));
-            if let Some(linked_tree) = resolved {
-                extend_defined_from_tree(linked_tree, &mut defined);
+        let mut queue: std::collections::VecDeque<String> =
+            ctx.tree.linked.iter().cloned().collect();
+        for seed in crate::seeds::discover_seeds([ctx.file_path.as_str()]) {
+            let champ = seed.champion.to_lowercase();
+            // Only the game's copy counts when the mod doesn't override the
+            // file — a mod-shipped version replaces it wholesale at runtime.
+            let champ_bin = format!("data/characters/{champ}/{champ}.bin");
+            if !ctx.wad.has_path(&champ_bin) {
+                queue.push_back(champ_bin);
             }
+            if let Some(multi) = find_game_multi_skins_bin(game, &champ) {
+                if !ctx.wad.has_path(&multi) {
+                    queue.push_back(multi);
+                }
+            }
+        }
+        while let Some(path) = queue.pop_front() {
+            if game_bin_cache.len() >= GAME_CLOSURE_CAP || game_bin_cache.contains_key(&path) {
+                continue;
+            }
+            let resolved = game.game_bin(&path);
+            if let Some(tree) = &resolved {
+                extend_defined_from_tree(tree, &mut defined);
+                for linked in &tree.linked {
+                    if !game_bin_cache.contains_key(linked) {
+                        queue.push_back(linked.clone());
+                    }
+                }
+            }
+            game_bin_cache.insert(path, resolved);
         }
     }
 
@@ -406,5 +472,114 @@ mod tests {
         let dead = collect_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
 
         assert!(dead.is_empty());
+    }
+
+    #[test]
+    fn not_dead_when_defined_in_game_champion_bin_closure() {
+        let hashes = MockHashProvider::new();
+        let wad = MockWadProvider;
+
+        // The mod's skin BIN links nothing; the target entry lives in a CAC
+        // BIN linked from the game's always-loaded champion base BIN.
+        let mut tree = BinTree::default();
+        tree.objects.insert(0, make_main_object(0x1234));
+
+        let champ_tree = BinTree {
+            linked: vec!["data/characters/x/cac/x_base.bin".to_string()],
+            ..Default::default()
+        };
+
+        let mut cac_tree = BinTree::default();
+        cac_tree.objects.insert(
+            0x1234,
+            BinObject {
+                class_hash: TypeHash(0x27E0C761),
+                path_hash: PathHash(0x1234),
+                properties: IndexMap::new(),
+            },
+        );
+
+        let mut bins = HashMap::new();
+        bins.insert("data/characters/x/x.bin".to_string(), champ_tree);
+        bins.insert("data/characters/x/cac/x_base.bin".to_string(), cac_tree);
+        let game = MapGameProvider { bins };
+
+        let mut ctx = base_ctx(tree, &hashes, &wad);
+        ctx.file_path = "data/characters/x/skins/skin0.bin".to_string();
+        ctx.game = Some(&game);
+
+        let dead = collect_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
+        assert!(
+            dead.is_empty(),
+            "entries in the champion-bin closure are alive at runtime"
+        );
+
+        // Without the champion-bin seed (unrecognizable file_path) the same
+        // link is dead again — the closure is what saved it.
+        let mut tree2 = BinTree::default();
+        tree2.objects.insert(0, make_main_object(0x1234));
+        let mut ctx2 = base_ctx(tree2, &hashes, &wad);
+        ctx2.game = Some(&game);
+        let dead2 = collect_dead_links(&ctx2, "SkinCharacterDataProperties", &[gear_target()]);
+        assert_eq!(dead2, vec![(0, 0x1234)]);
+    }
+
+    #[test]
+    fn not_dead_when_defined_in_game_multi_skins_bin() {
+        let hashes = MockHashProvider::new();
+        let wad = MockWadProvider;
+
+        let mut tree = BinTree::default();
+        tree.objects.insert(0, make_main_object(0x1234));
+
+        let mut multi_tree = BinTree::default();
+        multi_tree.objects.insert(
+            0x1234,
+            BinObject {
+                class_hash: TypeHash(0x27E0C761),
+                path_hash: PathHash(0x1234),
+                properties: IndexMap::new(),
+            },
+        );
+
+        let mut bins = HashMap::new();
+        bins.insert(
+            "data/characters/x/skins/root.bin".to_string(),
+            BinTree::default(),
+        );
+        bins.insert(
+            "data/characters/x/skins/skin0.bin".to_string(),
+            BinTree::default(),
+        );
+        bins.insert(
+            "data/characters/x/skins/skin10.bin".to_string(),
+            BinTree::default(),
+        );
+        bins.insert(
+            "data/characters/x/skins/skin2.bin".to_string(),
+            BinTree::default(),
+        );
+        bins.insert(
+            "data/characters/x/x_multi_skins_root_skins_skin0_skins_skin10_skins_skin2.bin"
+                .to_string(),
+            multi_tree,
+        );
+        let game = MapGameProvider { bins };
+
+        assert_eq!(
+            find_game_multi_skins_bin(&game, "x").as_deref(),
+            Some("data/characters/x/x_multi_skins_root_skins_skin0_skins_skin10_skins_skin2.bin"),
+            "slot list must be joined in lexicographic order"
+        );
+
+        let mut ctx = base_ctx(tree, &hashes, &wad);
+        ctx.file_path = "data/characters/x/skins/skin0.bin".to_string();
+        ctx.game = Some(&game);
+
+        let dead = collect_dead_links(&ctx, "SkinCharacterDataProperties", &[gear_target()]);
+        assert!(
+            dead.is_empty(),
+            "entries in the game's multi-skins combo BIN are alive at runtime"
+        );
     }
 }
