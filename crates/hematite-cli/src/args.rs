@@ -414,7 +414,7 @@ mod tests {
 
         let config = load_repo_config();
 
-        assert_eq!(config.version, "2.3.0");
+        assert_eq!(config.version, "2.3.1");
 
         // The central enable list is the single authority — spot-check both
         // directions plus a WAD-level entry.
@@ -446,6 +446,10 @@ mod tests {
                         .any(|t| t.class == "AnimationResourceData"
                             && t.field == "mAnimationFilePath")
                 );
+                assert!(targets
+                    .iter()
+                    .any(|t| t.class == "SkinMeshDataProperties_MaterialOverride"
+                        && t.field == "texture"));
             }
             other => {
                 panic!("file_ref_migration.detect: expected ClassFieldIsString, got {other:?}")

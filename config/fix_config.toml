@@ -1,4 +1,4 @@
-version = "2.3.0"
+version = "2.3.1"
 last_updated = "2026-08-21"
 
 enabled_fixes = [
@@ -51,6 +51,7 @@ targets = [
     { class = "SkinCharacterDataProperties", field = "iconCircle" },
     { class = "SkinCharacterDataProperties", field = "iconSquare" },
     { class = "SkinMeshDataProperties", field = "texture" },
+    { class = "SkinMeshDataProperties_MaterialOverride", field = "texture" },
     { class = "StaticMaterialShaderSamplerDef", field = "texturePath" },
 ]
 
@@ -62,6 +63,7 @@ targets = [
     { class = "SkinCharacterDataProperties", field = "iconCircle" },
     { class = "SkinCharacterDataProperties", field = "iconSquare" },
     { class = "SkinMeshDataProperties", field = "texture" },
+    { class = "SkinMeshDataProperties_MaterialOverride", field = "texture" },
     { class = "StaticMaterialShaderSamplerDef", field = "texturePath" },
 ]
 
