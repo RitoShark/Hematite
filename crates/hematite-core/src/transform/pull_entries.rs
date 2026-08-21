@@ -137,11 +137,23 @@ fn drop_dead_links_for_field(
     dead: &HashSet<u32>,
 ) -> u32 {
     let mut count = 0;
-    for prop in properties.values_mut() {
+    // A bare `Link` value can't be dropped in place — the whole property
+    // goes, or detection (which counts bare links) re-fires forever.
+    let mut remove_keys: Vec<u32> = Vec::new();
+    for (key, prop) in properties.iter_mut() {
         if prop.name_hash.0 == link_field_hash {
+            if matches!(&prop.value, PropertyValue::Link(h) if dead.contains(h)) {
+                remove_keys.push(*key);
+                continue;
+            }
             count += drop_dead_links_from_value(&mut prop.value, dead);
         } else {
             count += drop_nested_for_field(&mut prop.value, link_field_hash, dead);
+        }
+    }
+    for key in remove_keys {
+        if properties.shift_remove(&key).is_some() {
+            count += 1;
         }
     }
     count
@@ -629,6 +641,51 @@ mod tests {
             }
             other => panic!("expected Container, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn drops_bare_link_property_when_unpullable() {
+        let hashes = MockHashProvider::new();
+        let wad = MockWadProvider;
+
+        let mut properties = IndexMap::new();
+        properties.insert(
+            CAC_LINK_FIELD_HASH,
+            BinProperty {
+                name_hash: FieldHash(CAC_LINK_FIELD_HASH),
+                value: PropertyValue::Link(0x4444_4444),
+            },
+        );
+        let mut tree = BinTree::default();
+        tree.objects.insert(
+            0,
+            BinObject {
+                class_hash: TypeHash(MAIN_TYPE_HASH),
+                path_hash: PathHash(0),
+                properties,
+            },
+        );
+
+        let file_path = "data/characters/x/skins/skin0.bin";
+        let mut ctx = base_ctx(tree, &hashes, &wad, file_path);
+
+        let empty_game = EmptyGameProvider;
+        ctx.game = Some(&empty_game);
+
+        let count = apply(
+            &mut ctx,
+            "SkinCharacterDataProperties",
+            &[cac_target()],
+            None,
+        );
+
+        assert_eq!(count, 1, "bare dead Link must drop its whole property");
+        assert!(
+            !ctx.tree.objects[&0]
+                .properties
+                .contains_key(&CAC_LINK_FIELD_HASH),
+            "property holding the bare dead Link should have been removed"
+        );
     }
 
     #[test]

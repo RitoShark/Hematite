@@ -64,6 +64,19 @@ pub fn apply_fixes_in_phase(
             continue;
         }
 
+        // Without a game install, dead-link detection can't consult the game
+        // closure — every game-defined entry looks "dead" and the pull can
+        // never apply. Skip instead of reporting false errors.
+        if ctx.game.is_none()
+            && matches!(
+                fix_rule.apply,
+                hematite_types::config::TransformAction::PullEntriesFromGame { .. }
+            )
+        {
+            tracing::debug!("Skipping '{}': no game install available", fix_id);
+            continue;
+        }
+
         let detected = detect_issue(&fix_rule.detect, ctx);
 
         if detected {
