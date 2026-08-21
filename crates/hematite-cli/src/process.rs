@@ -1149,7 +1149,7 @@ fn process_wad_file(
         ui.stage("Rebuilding WAD…");
         tracing::info!("Building modified WAD...");
 
-        let output_path = file.with_extension("fixed.wad.client");
+        let output_path = hematite_orchestrate::fix_folder::fixed_wad_output_path(file);
         let mut output_file =
             std::fs::File::create(&output_path).context("Failed to create output WAD file")?;
 
@@ -1448,7 +1448,7 @@ fn process_modpkg_file(
                     .unwrap_or_default()
                     .to_string();
                 // Prefer the pipeline's fixed output folder when it exists.
-                let fixed_dir = wad_dir.with_extension("fixed.wad.client");
+                let fixed_dir = hematite_orchestrate::fix_folder::fixed_wad_output_path(&wad_dir);
                 let source_dir = if fixed_dir.is_dir() {
                     &fixed_dir
                 } else {
@@ -1680,10 +1680,9 @@ fn process_fantome_file(
 
             if is_wad {
                 // Use the fixed WAD if it exists, otherwise copy original
-                let fixed_wad_path = temp_dir
-                    .path()
-                    .join(&entry_name)
-                    .with_extension("fixed.wad.client");
+                let fixed_wad_path = hematite_orchestrate::fix_folder::fixed_wad_output_path(
+                    &temp_dir.path().join(&entry_name),
+                );
 
                 if fixed_wad_path.exists() {
                     let fixed_bytes = std::fs::read(&fixed_wad_path)
@@ -1698,10 +1697,9 @@ fn process_fantome_file(
                     tracing::debug!("Repacked original WAD: {}", entry_name);
                 }
             } else if let Some(key) = wad_folder_key {
-                let fixed_folder_path = temp_dir
-                    .path()
-                    .join(&key)
-                    .with_extension("fixed.wad.client");
+                let fixed_folder_path = hematite_orchestrate::fix_folder::fixed_wad_output_path(
+                    &temp_dir.path().join(&key),
+                );
 
                 if fixed_folder_path.exists() {
                     written_fixed_folders.insert((key, fixed_folder_path));

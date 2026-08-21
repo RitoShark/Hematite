@@ -671,7 +671,7 @@ pub fn fix_folder(
         let output_path = if opts.in_place {
             folder.to_path_buf()
         } else {
-            folder.with_extension("fixed.wad.client")
+            fixed_wad_output_path(folder)
         };
         std::fs::create_dir_all(&output_path).context("Failed to create output WAD folder")?;
 
@@ -731,6 +731,24 @@ pub fn fix_folder(
     }
 
     Ok(total_result)
+}
+
+/// Output name for a fixed WAD: `Aatrox.wad.client` → `Aatrox.fixed.wad.client`.
+/// The `.fixed` marker goes before the `.wad.client` suffix so the output is
+/// still a recognizable WAD; non-WAD names just get `.fixed` appended.
+pub fn fixed_wad_output_path(path: &Path) -> std::path::PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let new_name = match name.to_lowercase().strip_suffix(".wad.client") {
+        Some(_) => format!(
+            "{}.fixed.wad.client",
+            &name[..name.len() - ".wad.client".len()]
+        ),
+        None => format!("{name}.fixed"),
+    };
+    path.with_file_name(new_name)
 }
 
 /// Run the `post_repath`-phase BIN fixes over every BIN in `all_files`,
@@ -805,6 +823,28 @@ pub fn apply_post_repath_fixes(
         total.merge(result);
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixed_wad_output_path;
+    use std::path::Path;
+
+    #[test]
+    fn fixed_wad_name_keeps_single_wad_client_suffix() {
+        assert_eq!(
+            fixed_wad_output_path(Path::new("mods/Aatrox.wad.client")),
+            Path::new("mods/Aatrox.fixed.wad.client")
+        );
+        assert_eq!(
+            fixed_wad_output_path(Path::new("Kayn.WAD.CLIENT")),
+            Path::new("Kayn.fixed.wad.client")
+        );
+        assert_eq!(
+            fixed_wad_output_path(Path::new("loose_folder")),
+            Path::new("loose_folder.fixed")
+        );
+    }
 }
 
 /// Prime the live `GameIndex` with each seed champion's base WAD plus any
