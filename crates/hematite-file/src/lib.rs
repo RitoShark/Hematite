@@ -10,3 +10,4 @@ pub mod strip_mipmaps;
 pub mod texture_converter;
 pub mod wad_adapter;
 pub mod wad_builder;
+pub mod wad_folder;

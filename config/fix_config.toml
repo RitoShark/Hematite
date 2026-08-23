@@ -1,4 +1,4 @@
-version = "2.3.3"
+version = "2.3.4"
 last_updated = "2026-08-22"
 
 enabled_fixes = [
@@ -337,7 +337,7 @@ path_prefixes = ["assets/characters/"]
 
 [wad_fixes.bnk_remover]
 name = "Broken Sound Files"
-description = "Removes BNK audio files with outdated Wwise versions (only v145+ is valid)"
+description = "Removes orphaned BNK audio files with outdated Wwise versions (only v145+ is valid). Banks the mod's own BINs still reference are kept — they carry the mod's custom audio."
 severity = "low"
 
 [wad_fixes.bnk_remover.detect]
@@ -353,6 +353,7 @@ allowed_versions = [145]
 
 [wad_fixes.bnk_remover.apply]
 type = "remove_file"
+unless_referenced = true
 
 [wad_fixes.dds_texture_converter]
 name = "DDS → TEX Texture Conversion"

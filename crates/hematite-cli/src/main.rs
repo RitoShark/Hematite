@@ -277,7 +277,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
     // --repath flag or config.repath.enabled activates repathing.
     let repath_opts: Option<RepathOptions> = {
         let cfg = &config.repath;
-        let active = cli.repath || cfg.enabled;
+        let active = !cli.no_repath && (cli.repath || cfg.enabled);
         if active {
             // Prefix priority: explicit CLI > config (when non-placeholder)
             // > Topaz-derived from filename.

@@ -905,6 +905,7 @@ dependencies = [
  "rs_mesh",
  "rs_tex",
  "rs_wad",
+ "tempfile",
  "tracing",
  "xxhash-rust",
 ]

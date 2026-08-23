@@ -1211,19 +1211,18 @@ fn process_wad_file(
     // === WAD REBUILDING ===
     // Write modified WAD if any changes were made and not dry-run
     if !dry_run && (total_result.fixes_applied > 0 || !shared_files_to_remove.is_empty()) {
-        ui.stage("Rebuilding WAD…");
-        tracing::info!("Building modified WAD...");
+        ui.stage("Writing WAD folder…");
+        tracing::info!("Writing modified WAD folder...");
 
+        // Output is an unpacked WAD *folder* (paths already un-hashed via the
+        // LMDB dictionary during extraction), never a repacked .wad.client.
         let output_path = hematite_orchestrate::fix_folder::fixed_wad_output_path(file);
-        let mut output_file =
-            std::fs::File::create(&output_path).context("Failed to create output WAD file")?;
-
-        let chunks_included = hematite_file::wad_builder::build_wad(
+        let chunks_included = hematite_file::wad_folder::write_wad_folder(
+            &output_path,
             &all_files,
             &shared_files_to_remove,
-            &mut output_file,
         )
-        .context("Failed to build output WAD")?;
+        .context("Failed to write output WAD folder")?;
 
         // Only surface the WAD path to the UI when it's the real
         // user-visible output. WAD writes inside a temp dir are
@@ -1235,9 +1234,9 @@ fn process_wad_file(
         if !is_intermediate {
             ui.fix_applied(&format!("Wrote {}", output_path.display()), None);
         }
-        tracing::info!("✓ Wrote fixed WAD to: {}", output_path.display());
+        tracing::info!("✓ Wrote fixed WAD folder to: {}", output_path.display());
         tracing::info!(
-            "  {} chunks included, {} files removed",
+            "  {} chunks written, {} files removed",
             chunks_included,
             shared_files_to_remove.len()
         );
@@ -1733,7 +1732,7 @@ fn process_fantome_file(
         let mut zip_writer = zip::ZipWriter::new(std::io::BufWriter::new(output_file));
 
         let zip_options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         let mut written_fixed_folders = std::collections::HashSet::new();
 
@@ -1744,17 +1743,16 @@ fn process_fantome_file(
             let wad_folder_key = get_wad_folder_key(&entry_name);
 
             if is_wad {
-                // Use the fixed WAD if it exists, otherwise copy original
+                // A fixed WAD is now an unpacked folder, so a packed input
+                // entry is replaced by that folder's files under the same
+                // `<name>.wad.client/` prefix.
                 let fixed_wad_path = hematite_orchestrate::fix_folder::fixed_wad_output_path(
                     &temp_dir.path().join(&entry_name),
                 );
 
-                if fixed_wad_path.exists() {
-                    let fixed_bytes = std::fs::read(&fixed_wad_path)
-                        .context("Failed to read fixed WAD from temp")?;
-                    zip_writer.start_file(&entry_name, zip_options)?;
-                    std::io::Write::write_all(&mut zip_writer, &fixed_bytes)?;
-                    tracing::debug!("Repacked fixed WAD: {}", entry_name);
+                if fixed_wad_path.is_dir() {
+                    written_fixed_folders.insert((entry_name.clone(), fixed_wad_path));
+                    tracing::debug!("Replacing packed WAD with folder: {}", entry_name);
                 } else {
                     // No fixes applied to this WAD, copy original
                     zip_writer.start_file(&entry_name, zip_options)?;

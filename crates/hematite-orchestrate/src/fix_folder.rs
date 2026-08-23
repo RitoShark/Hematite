@@ -73,7 +73,11 @@ pub fn fix_folder(
                 .strip_prefix(folder)
                 .context("Failed to strip prefix from WAD folder path")?;
             let rel_path_str = rel_path.to_string_lossy().replace('\\', "/");
-            let hash = wad_path_hash(&rel_path_str);
+            // A root-level 16-hex-digit name IS the chunk's path hash (the
+            // extractor's form for chunks the dictionary can't name) — hashing
+            // the hex string instead would silently re-key the chunk.
+            let hash = hematite_file::wad_folder::hex_chunk_hash(&rel_path_str)
+                .unwrap_or_else(|| wad_path_hash(&rel_path_str));
             let bytes = std::fs::read(path).context("Failed to read file in WAD folder")?;
             all_files.push((hash, rel_path_str, bytes));
         }

@@ -140,6 +140,14 @@ pub struct Cli {
 
     #[arg(
         long,
+        conflicts_with = "repath",
+        help = "Never repath, even though the config enables it. Use when a run must \
+                leave every asset path exactly where it is (e.g. a bulk --file-refs pass)."
+    )]
+    pub no_repath: bool,
+
+    #[arg(
+        long,
         value_name = "PREFIX",
         help = "Custom repath prefix. If omitted, derived Topaz-style from the input \
                 filename + skin number (e.g. .yone1_). With the default in-folder layout \
@@ -414,7 +422,7 @@ mod tests {
 
         let config = load_repo_config();
 
-        assert_eq!(config.version, "2.3.3");
+        assert_eq!(config.version, "2.3.4");
 
         // The central enable list is the single authority — spot-check both
         // directions plus a WAD-level entry.
@@ -564,20 +572,20 @@ mod tests {
             other => panic!("resolve_dead_refs.apply: expected ResolveDeadRefs, got {other:?}"),
         }
 
-        // anm_remover: reference-aware removal — only .anm files the mod's
-        // BINs no longer point at (by string or file hash) are bloat.
-        let anm_remover = config
-            .wad_fixes
-            .get("anm_remover")
-            .expect("anm_remover rule missing");
-        match &anm_remover.apply {
-            WadTransformAction::RemoveFile { unless_referenced } => {
-                assert!(
-                    unless_referenced,
-                    "anm_remover must keep referenced animations"
-                );
+        // Reference-aware removal — only files the mod's BINs no longer point
+        // at (by string or file hash) are bloat. A referenced .anm is a real
+        // animation; a referenced .bnk carries the mod's custom audio.
+        for id in ["anm_remover", "bnk_remover"] {
+            let rule = config
+                .wad_fixes
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} rule missing"));
+            match &rule.apply {
+                WadTransformAction::RemoveFile { unless_referenced } => {
+                    assert!(unless_referenced, "{id} must keep referenced files");
+                }
+                other => panic!("{id}.apply: expected RemoveFile, got {other:?}"),
             }
-            other => panic!("anm_remover.apply: expected RemoveFile, got {other:?}"),
         }
 
         // combo_bin_relocate: descriptor-only wad_fixes entry. The pipeline

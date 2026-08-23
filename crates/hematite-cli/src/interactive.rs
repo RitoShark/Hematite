@@ -298,6 +298,7 @@ fn baseline_cli(input: PathBuf) -> Cli {
         dry_run: false,
         check: false,
         repath: false,
+        no_repath: false,
         repath_prefix: None,
         repath_layout: RepathLayoutArg::InFolder,
         invis_texture: false,
