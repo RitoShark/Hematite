@@ -274,6 +274,33 @@ pub fn fix_folder(
         );
     }
 
+
+    // Ability VFX: what share of the effects the player aims with actually exist.
+    let mut vfx_finding: Option<hematite_types::diagnostic::Diagnostic> = None;
+    if config.vfx_ratio.enabled {
+        let _t = hematite_core::timing::span("vfx ratio");
+        // Whose effects these are. Another champion's particles are leftovers from
+        // whatever the mod was built from and must not count against it.
+        let champion = all_files
+            .iter()
+            .filter_map(|(_, path, _)| hematite_core::seeds::character_of(path))
+            .next()
+            .unwrap_or_default();
+        let references: Vec<String> = early_parsed
+            .values()
+            .flat_map(hematite_core::walk::string_refs)
+            .map(str::to_string)
+            .collect();
+        let game_ref = live.map(|l| l as &dyn GameProvider);
+        vfx_finding = hematite_core::check::vfx_ratio::run(
+            &config.vfx_ratio,
+            &config.reasons,
+            &references,
+            &champion,
+            |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
+        );
+    }
+
     // Loose textures the game will never load.
     //
     // Runs BEFORE the WAD pipeline, which converts `.dds` to `.tex` in the working set.
@@ -360,6 +387,12 @@ pub fn fix_folder(
         total_result.report.push(finding.clone());
     }
     if !ratio_findings.is_empty() {
+        total_result.report.attach_catalog(&config.reasons);
+    }
+
+
+    if let Some(finding) = &vfx_finding {
+        total_result.report.push(finding.clone());
         total_result.report.attach_catalog(&config.reasons);
     }
 

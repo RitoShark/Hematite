@@ -20,6 +20,7 @@
 
 pub mod asset_ratio;
 pub mod loose_textures;
+pub mod vfx_ratio;
 
 use crate::context::FixContext;
 use crate::detect::detect_issue;

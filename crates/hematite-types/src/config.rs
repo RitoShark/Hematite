@@ -41,6 +41,67 @@ pub struct FixConfig {
     /// Proportion checks: how much of what a mod references actually resolves.
     #[serde(default)]
     pub ratio_checks: Vec<RatioCheckConfig>,
+    /// Settings for the ability-VFX measurement.
+    #[serde(default)]
+    pub vfx_ratio: VfxRatioConfig,
+}
+
+/// Settings for the ability-VFX measurement.
+///
+/// Separate from the generic proportion checks because the denominator is not "everything
+/// referenced": most of a champion's particle set is recalls, idles and ground decals, and
+/// counting those would make the share meaningless. Only gameplay effects count, which
+/// needs the classification these marker lists drive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VfxRatioConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Share at which the abilities are considered unrenderable. INCLUSIVE.
+    #[serde(default = "default_vfx_fail")]
+    pub fail_at: f32,
+    /// Share at which the abilities are visibly degraded. INCLUSIVE, unlike the asset
+    /// ratio's exclusive warn bound; both were tuned separately.
+    #[serde(default = "default_vfx_warn")]
+    pub warn_at: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warn_reason: Option<String>,
+    /// Game modes no live queue renders. Their effects are always absent and never a defect.
+    #[serde(default)]
+    pub legacy_markers: Vec<String>,
+    /// Audio cues, which are not visual effects at all.
+    #[serde(default)]
+    pub audio_markers: Vec<String>,
+    /// Non-gameplay effects: recalls, idles, deaths, emotes.
+    #[serde(default)]
+    pub cosmetic_markers: Vec<String>,
+    /// Helper overlays: markers, timers, range rings.
+    #[serde(default)]
+    pub subhelper_markers: Vec<String>,
+}
+
+fn default_vfx_fail() -> f32 {
+    0.80
+}
+fn default_vfx_warn() -> f32 {
+    0.30
+}
+
+impl Default for VfxRatioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            fail_at: default_vfx_fail(),
+            warn_at: default_vfx_warn(),
+            fail_reason: None,
+            warn_reason: None,
+            legacy_markers: Vec::new(),
+            audio_markers: Vec::new(),
+            cosmetic_markers: Vec::new(),
+            subhelper_markers: Vec::new(),
+        }
+    }
 }
 
 /// One proportion check.

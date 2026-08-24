@@ -868,3 +868,36 @@ warn_at     = 0.25
 fail_at     = 0.80
 warn_reason = "missing_particles"
 fail_reason = "missing_textures"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ABILITY VFX
+# ═════════════════════════════════════════════════════════════════════════════
+# A skin whose abilities render nothing is not a crash, but it cannot be played: you
+# cannot aim what you cannot see.
+#
+# Only GAMEPLAY effects count. A champion's particle set is mostly recalls, idles,
+# level-up flashes and ground decals; counting all of it would put a fully broken skin
+# around a third dead and a healthy one nowhere near zero, so the share would say nothing.
+#
+# Both bounds are INCLUSIVE here, unlike the asset ratio's exclusive warn bound. The two
+# were tuned separately.
+#
+# A dead missile warns on its own whatever the share: the projectile is what the enemy
+# reacts to. Deliberately just the missile, not casts, zones or aim indicators, because a
+# single dead one of those over-flagged skins that play perfectly well.
+
+[vfx_ratio]
+enabled     = true
+fail_at     = 0.80
+warn_at     = 0.30
+fail_reason = "no_ability_vfx"
+warn_reason = "visually_bugged_vfx"
+
+# Game modes no live queue renders. Their effects are always absent and never a defect.
+legacy_markers = ["doombot", "nightmarebot", "nightmare_bot", "_ha_", "hexakill", "ascension", "poroking", "snowbattle", "onevone", "1v1", "2v2", "_urf_"]
+# Audio cues, which are not visual effects at all.
+audio_markers = ["audio", "sound", "_sfx", "_vo_", "_vo."]
+# Non-gameplay effects.
+cosmetic_markers = ["recall", "idle", "emote", "taunt", "dance", "home", "hud", "death", "spawn", "joke", "laugh", "respawn", "lvlup", "levelup", "ambient"]
+# Helper overlays rather than the ability itself.
+subhelper_markers = ["_marker", "_alert", "_health_lvl", "_timer", "_timeout", "_ring", "_range", "_zaconly", "_tether"]
