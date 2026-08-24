@@ -132,6 +132,12 @@ path = "SamplerValues.*.TextureName"
 type = "rename_hash"
 from_hash = "TextureName"
 to_hash = "TexturePath"
+# Only when the field actually holds a path. A sampler stores its own NAME here too
+# ("Diffuse_Texture", "ToonShadingRimTex"), and promoting one of those into texturePath
+# points the material at something that is not a file and loses the real path. It also made
+# the rule unrepeatable: the samplername rule below leaves a name in TextureName, which is
+# what this one looks for, so a second repair corrupted what the first one left alone.
+only_asset_paths = true
 
 [fixes.staticmat_samplername]
 name = "White Model (SamplerName)"

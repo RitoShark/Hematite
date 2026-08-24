@@ -619,7 +619,18 @@ pub enum TransformAction {
 
     /// Rename a field hash across the BIN tree.
     #[serde(rename = "rename_hash")]
-    RenameHash { from_hash: String, to_hash: String },
+    RenameHash {
+        from_hash: String,
+        to_hash: String,
+        /// Only rename when the field holds an asset path.
+        ///
+        /// A shader sampler stores its own NAME and its texture's PATH under similar
+        /// fields. Renaming blind moved names like `Diffuse_Texture` into `texturePath`,
+        /// so the material pointed at something that is not a file, and made the rule
+        /// unrepeatable: a second run picked up what the first one left.
+        #[serde(default)]
+        only_asset_paths: bool,
+    },
 
     /// Replace file extension in all string values (e.g. .dds → .tex).
     #[serde(rename = "replace_string_extension")]

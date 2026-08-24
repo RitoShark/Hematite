@@ -65,8 +65,12 @@ pub fn apply_transform(
                 create_parent.as_ref(),
             )
         }
-        TransformAction::RenameHash { from_hash, to_hash } => {
-            rename_hash::apply(ctx, from_hash, to_hash)
+        TransformAction::RenameHash {
+            from_hash,
+            to_hash,
+            only_asset_paths,
+        } => {
+            rename_hash::apply(ctx, from_hash, to_hash, *only_asset_paths)
         }
         TransformAction::ReplaceStringExtension {
             from,
