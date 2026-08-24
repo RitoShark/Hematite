@@ -21,6 +21,6 @@ pub use game_access::GameFileAccess;
 pub use list_fixes::{list_fixes, FixInfo};
 pub use live_provider::LiveGameProvider;
 pub use options::FixOptions;
-pub use check::ModChecker;
+pub use check::{ModChecker, RepairOutcome};
 pub use remote::{load_champion_list, load_fix_config};
 pub use progress::{NoopSink, ProgressSink};

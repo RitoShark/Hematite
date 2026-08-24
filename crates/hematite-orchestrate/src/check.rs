@@ -202,6 +202,166 @@ impl ModChecker {
     }
 }
 
+/// Repair a mod, writing the result back where it came from.
+///
+/// The counterpart to [`ModChecker::check`], sharing its setup. Everything the check knows
+/// about a mod's defects, the fix pipeline can act on, so running them from one loaded
+/// engine costs nothing extra.
+///
+/// ## Both forms, one code path
+/// A packed archive is unpacked to a scratch folder, fixed there, and repacked over the
+/// original. That is slower than editing in place would be, and it is the only way the two
+/// forms cannot diverge: the fix pipeline has exactly one implementation, the folder one,
+/// and a packed mod is a folder it has not been unpacked into yet.
+///
+/// ## Writes only on success
+/// The repack goes to a temporary file beside the target and is renamed over it, so an
+/// archive is never left half-written. A mod that fails mid-repair is the mod you started
+/// with.
+impl ModChecker {
+    /// Apply every enabled fix to a mod, in place.
+    ///
+    /// Returns the report of what was found, the same as [`ModChecker::check`], plus how
+    /// many fixes were applied. Nothing is written when nothing fired.
+    pub fn repair(&self, path: &Path) -> Result<RepairOutcome> {
+        let archives = mod_archives(path)?;
+        if archives.is_empty() {
+            anyhow::bail!("{} holds no .wad.client archive to repair", path.display());
+        }
+
+        let scratch = tempfile::Builder::new()
+            .prefix("hematite-repair-")
+            .tempdir()
+            .context("Failed to create a scratch directory")?;
+
+        let mut outcome = RepairOutcome::default();
+        let mut failures = Vec::new();
+        for archive in &archives {
+            match self.repair_archive(archive, scratch.path()) {
+                Ok((report, applied)) => {
+                    outcome.report.merge(report);
+                    outcome.fixes_applied += applied;
+                    if applied > 0 {
+                        outcome.archives_changed += 1;
+                    }
+                }
+                // One archive failing must not abandon the others, and must not be
+                // reported as a clean repair either.
+                Err(e) => {
+                    tracing::warn!("repair failed for {}: {e:#}", archive.display());
+                    failures.push(format!("{}: {e:#}", archive.display()));
+                }
+            }
+        }
+
+        if failures.len() == archives.len() {
+            anyhow::bail!("every archive failed to repair: {}", failures.join("; "));
+        }
+        for failure in failures {
+            outcome.report.mark_skipped("archive", SkipReason::Failed(failure));
+        }
+
+        outcome.report.dedupe();
+        outcome.report.attach_catalog(&self.config.reasons);
+        Ok(outcome)
+    }
+
+    fn repair_archive(&self, archive: &Path, scratch: &Path) -> Result<(CheckReport, u32)> {
+        let packed = archive.is_file();
+        let folder = if packed {
+            self.unpack(archive, scratch)?
+        } else {
+            archive.to_path_buf()
+        };
+
+        let opts = FixOptions {
+            dry_run: false,
+            detect_only: false,
+            repath: None,
+            restore_anm: false,
+            relocate_combo_bins: false,
+            game_wad: None,
+            live: self.live.as_ref(),
+            in_place: true,
+            };
+        let result = crate::fix_folder(
+            &folder,
+            &self.config,
+            &self.enabled_fixes,
+            &self.champions,
+            &self.hashes,
+            &opts,
+            &NoopSink,
+        )?;
+
+        if packed && result.fixes_applied > 0 {
+            repack(&folder, archive)?;
+        }
+        Ok((result.report, result.fixes_applied))
+    }
+}
+
+/// What a repair did.
+#[derive(Debug, Default)]
+pub struct RepairOutcome {
+    /// What was found, whether or not it could be fixed.
+    pub report: CheckReport,
+    /// How many fixes fired across every archive.
+    pub fixes_applied: u32,
+    /// How many archives were rewritten.
+    pub archives_changed: usize,
+}
+
+/// Repack a fixed folder over the archive it came from.
+///
+/// Written to a sibling temporary file and renamed, so a failure part way through leaves
+/// the original intact rather than a truncated archive the game cannot read.
+fn repack(folder: &Path, archive: &Path) -> Result<()> {
+    let mut files: Vec<(u64, String, Vec<u8>)> = Vec::new();
+    for entry in walkdir::WalkDir::new(folder).into_iter().flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(folder)
+            .context("Failed to relativise a path inside the fixed folder")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        // A root-level 16-hex-digit name IS the chunk's path hash: the extractor's form for
+        // a chunk the dictionary could not name. Hashing the hex string would re-key it.
+        let hash = hematite_file::wad_folder::hex_chunk_hash(&relative)
+            .unwrap_or_else(|| hematite_file::wad_adapter::wad_path_hash(&relative));
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        files.push((hash, relative, bytes));
+    }
+
+    // Never write an empty archive over a real one. A fixed folder always has content, so
+    // finding none means the walk failed rather than that the mod is empty, and writing the
+    // result anyway destroys the mod to report success.
+    if files.is_empty() {
+        anyhow::bail!(
+            "refusing to repack {}: the fixed folder {} yielded no files",
+            archive.display(),
+            folder.display()
+        );
+    }
+
+    let temp = archive.with_extension("client.hematite-new");
+    {
+        let mut out = std::fs::File::create(&temp)
+            .with_context(|| format!("Failed to create {}", temp.display()))?;
+        hematite_file::wad_builder::build_wad(&files, &[], &mut out)
+            .context("Failed to build the repaired archive")?;
+        out.sync_all().ok();
+    }
+    std::fs::rename(&temp, archive).with_context(|| {
+        format!("Failed to replace {} with the repaired archive", archive.display())
+    })?;
+    Ok(())
+}
+
 /// Every `.wad.client` archive under `path`, packed or unpacked.
 ///
 /// Three layouts, because all three turn up. `path` can be one archive; a folder of
@@ -348,6 +508,66 @@ mod tests {
     }
 
     /// A packed archive is as valid an input as an unpacked one.
+    /// The unpack/repack pair has to be lossless, or a repair that fixed one file would
+    /// quietly corrupt every other file in the archive.
+    #[test]
+    fn a_folder_repacks_into_a_readable_archive() {
+        use hematite_file::wad_adapter::{wad_path_hash, WadFile};
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Jhin.wad.client");
+        let entries = [
+            ("data/characters/jhin/skins/skin0.bin", &b"PROPfirst"[..]),
+            ("assets/characters/jhin/x.tex", &b"TEXbytes"[..]),
+        ];
+        for (path, bytes) in entries {
+            let file = folder.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, bytes).unwrap();
+        }
+        // A chunk the dictionary could not name keeps its hex name at the root, and must
+        // come back under its ORIGINAL hash rather than the hash of the hex string.
+        let unnamed = 0x0123_4567_89ab_cdefu64;
+        std::fs::write(folder.join(format!("{unnamed:016x}")), b"unnamed").unwrap();
+
+        let archive = dir.path().join("Jhin.wad.client.packed");
+        repack(&folder, &archive).unwrap();
+
+        let mut wad = WadFile::open(&archive).unwrap();
+        let hashes = wad.chunk_hash_set();
+        for (path, bytes) in entries {
+            let hash = wad_path_hash(path);
+            assert!(hashes.contains(&hash), "{path} missing from the archive");
+            assert_eq!(
+                wad.extract_chunk_by_hash(hash).unwrap().as_deref(),
+                Some(bytes),
+                "{path} came back different"
+            );
+        }
+        assert!(
+            hashes.contains(&unnamed),
+            "an unnamed chunk must keep its original hash"
+        );
+    }
+
+    /// The original must survive a repack that cannot finish.
+    #[test]
+    fn a_failed_repack_leaves_the_original_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("Jhin.wad.client");
+        std::fs::write(&archive, b"the original bytes").unwrap();
+
+        // A folder that does not exist: nothing to walk, so nothing to write.
+        let missing = dir.path().join("not-there");
+        let _ = repack(&missing, &archive);
+
+        assert_eq!(
+            std::fs::read(&archive).unwrap(),
+            b"the original bytes",
+            "a repack that found nothing must not have touched the archive"
+        );
+    }
+
     #[test]
     fn a_packed_archive_is_accepted() {
         let dir = tempfile::tempdir().unwrap();
