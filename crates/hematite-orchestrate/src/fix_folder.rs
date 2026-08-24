@@ -303,13 +303,20 @@ pub fn fix_folder(
             .next()
             .unwrap_or_default();
         let references = collect_references();
+        // Whether an effect is DEFINED, not whether a file sits at its name. An effect is
+        // an entry inside a BIN; there is no file to find, so the path lookup this used to
+        // do answered "missing" for every effect in every mod.
         let game_ref = live.map(|l| l as &dyn GameProvider);
+        let defined = hematite_core::check::vfx_ratio::defined_effects(
+            early_parsed.values(),
+            |path| game_ref.and_then(|g| g.game_bin(path)),
+        );
         vfx_finding = hematite_core::check::vfx_ratio::run(
             &config.vfx_ratio,
             &config.reasons,
             references,
             &champion,
-            |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
+            |name| hematite_core::check::vfx_ratio::is_effect_defined(&defined, name),
         );
     }
 
@@ -513,6 +520,70 @@ pub fn fix_folder(
         total_result.report.attach_catalog(&config.reasons);
     }
     let mut shared_files_to_remove = Vec::new();
+
+    // === PULL MISSING ASSETS FROM THE GAME ===
+    // Only when repathing is off: the repath pipeline runs the same pull itself, and there it
+    // has to happen later so the assets are in place before every path is rewritten.
+    //
+    // Ahead of the WAD-level pipeline, so what the pull fetches goes through the same
+    // conversions as everything the mod shipped. Running it afterwards left a pulled `.dds`
+    // sitting beside a BIN reference the conversion had already rewritten to `.tex`: the
+    // asset was fetched, and the mod was still missing it.
+    if opts.pull_missing && repath_opts.is_none() && !dry_run {
+        if let Some(live) = live {
+            progress.stage("Pulling missing assets from the game…");
+            // The pull reads two things out of these options: whether to skip voice-over,
+            // and an explicit archive to pull from. Neither is a repath decision, so a
+            // caller that is not repathing still gets to make them.
+            let pull_opts = hematite_types::repath::RepathOptions {
+                skip_vo: config.repath.skip_vo,
+                game_wad: opts.game_wad.map(|p| p.to_path_buf()),
+                ..hematite_types::repath::RepathOptions::new(String::new())
+            };
+            let before: std::collections::HashSet<String> =
+                all_files.iter().map(|(_, p, _)| p.clone()).collect();
+
+            match extract_missing_from_live(
+                live,
+                &mut all_files,
+                &bin_provider,
+                hash_provider.as_ref(),
+                &pull_opts,
+            ) {
+                Ok(pulled) if pulled > 0 => {
+                    // Drop anything the game already serves at that same path. The pull
+                    // resolves a reference through suffix-stripping, so some of what it
+                    // fetches lands under a name the game does not have and the mod
+                    // genuinely needs; the rest is a byte-identical copy of a file the game
+                    // would have loaded anyway. Shipping those is what makes a mod collide
+                    // with shared game archives, which is a warning this very run reports.
+                    //
+                    // Only when not repathing. A repathed mod renames every path, so the
+                    // game serves none of them and it needs its own copy of everything.
+                    let before_len = all_files.len();
+                    all_files.retain(|(_, path, _)| {
+                        before.contains(path) || !live.has_path(path)
+                    });
+                    let redundant = before_len - all_files.len();
+                    let kept = pulled.saturating_sub(redundant as u32);
+                    if redundant > 0 {
+                        tracing::info!(
+                            "pulled {pulled} asset(s), dropped {redundant} the game already                              serves at the same path"
+                        );
+                    }
+                    if kept > 0 {
+                        tracing::info!("kept {kept} missing asset(s) from the game");
+                        progress.fix_applied("Pulled missing assets from the game", Some(kept));
+                        total_result.fixes_applied += kept;
+                    }
+                }
+                Ok(_) => {}
+                // Fail open: a mod we could not complete is still a mod we fixed other
+                // things in, and the report says what is still missing.
+                Err(e) => tracing::warn!("could not pull missing assets: {e:#}"),
+            }
+        }
+    }
 
     // === WAD-LEVEL PIPELINE ===
     progress.stage("Detecting WAD-level issues…");

@@ -22,7 +22,22 @@ use anyhow::{Context, Result};
 /// **Note**: This is a lossy process for BC formats due to re-compression.
 /// For lossless conversion, we'd need to copy raw compressed blocks, but
 /// DDS and TEX have different mipmap ordering (DDS: large→small, TEX: small→large).
+///
+/// ## Dimensions are normalised on the way out
+/// A block-compressed texture whose width or height is not a multiple of four crashes the
+/// client on upload. The dimension fix is a separate rule, and it runs against the files the
+/// mod shipped, so a `.tex` this function creates is never examined by it: converting a
+/// badly-sized `.dds` produced a badly-sized `.tex` and the repair introduced the very crash
+/// the check reports. Whatever leaves here is the shipped file, so it is normalised here.
 pub fn dds_to_tex(dds_bytes: &[u8]) -> Result<Vec<u8>> {
+    let converted = dds_to_tex_inner(dds_bytes)?;
+    // Best-effort: a texture the normaliser cannot read is one it cannot have broken, and
+    // refusing the conversion over it would leave the mod with the `.dds` the client no
+    // longer loads at all.
+    Ok(crate::fix_dimensions::fix_tex_dimensions(&converted).unwrap_or(converted))
+}
+
+fn dds_to_tex_inner(dds_bytes: &[u8]) -> Result<Vec<u8>> {
     // 1. Try lossless block-swapping first
     if let Some(tex) = dds_to_tex_lossless(dds_bytes) {
         tracing::debug!("Lossless DDS→TEX conversion succeeded");

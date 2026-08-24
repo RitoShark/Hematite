@@ -18,6 +18,18 @@
 //! - **Another champion's particles**, left over from whatever the mod was built from.
 //!   Never the mod's own effect.
 //!
+//! ## An effect is defined, not downloaded
+//! A VFX system is an entry inside a BIN, keyed by the FNV-1a of its name. It is not a file
+//! and there is no path to look up, so asking whether a file exists at its name answers
+//! "missing" for every effect that ever existed. What makes one real is that some BIN the
+//! game loads defines an object under that key.
+//!
+//! The texture and mesh an effect draws with are a different question, and one the asset
+//! proportion check already answers. Counting them here made this measurement depend on how
+//! many files a mod happened to ship: converting a `.dds` to the `.tex` the client actually
+//! loads moved one mod from half its effects missing to all of them missing, purely because
+//! the old filename stopped resolving.
+//!
 //! ## The missile override
 //! One dead missile warns on its own, whatever the percentage. The projectile is the thing
 //! the enemy reacts to, so losing it changes how the game plays even when everything else
@@ -52,6 +64,21 @@ pub struct VfxMarkers<'a> {
     pub cosmetic: &'a [String],
     /// Helper overlays: markers, timers, range rings.
     pub subhelper: &'a [String],
+}
+
+/// Extensions that mark a reference as an asset file rather than an effect.
+///
+/// A VFX system name carries no extension. Anything that does is the art an effect draws
+/// with, which the asset proportion check measures.
+const ASSET_EXTENSIONS: &[&str] = &[
+    ".dds", ".tex", ".sco", ".scb", ".skn", ".skl", ".anm", ".bin", ".troybin", ".bnk", ".wpk",
+    ".png", ".jpg", ".dat", ".mapgeo", ".preload",
+];
+
+/// Whether this reference names a file rather than an effect.
+pub fn is_asset_file(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ASSET_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
 }
 
 /// Ability slots a gameplay effect can belong to.
@@ -105,6 +132,11 @@ pub fn is_projectile(leaf: &str) -> bool {
 /// Classify one referenced effect.
 pub fn classify(name: &str, champion: &str, markers: &VfxMarkers<'_>) -> Kind {
     let lower = name.to_ascii_lowercase();
+
+    // The art an effect draws with is not the effect. See the module docs.
+    if is_asset_file(&lower) {
+        return Kind::Ignore;
+    }
 
     if markers.legacy.iter().any(|m| lower.contains(m.as_str()))
         || markers.audio.iter().any(|m| lower.contains(m.as_str()))
@@ -170,10 +202,61 @@ impl VfxVerdict {
     }
 }
 
+/// `VfxSystemDefinitionData`, the class an effect's definition has.
+const VFX_SYSTEM_DEFINITION: u32 = 0x45cd_899f;
+
+/// Entry keys of every effect these BINs define.
+///
+/// An effect is real when some BIN the game loads defines an object under its key. The
+/// mod's own BINs are the first source; the second is the BINs they link, which the game
+/// ships and the mod does not, and which is where most of a skin's effects actually live.
+/// Missing that second source would mark every unmodified effect dead.
+pub fn defined_effects<'a>(
+    mod_trees: impl Iterator<Item = &'a hematite_types::bin::BinTree>,
+    game_bin: impl Fn(&str) -> Option<std::sync::Arc<hematite_types::bin::BinTree>>,
+) -> HashSet<u32> {
+    let mut defined = HashSet::new();
+    let mut linked: HashSet<String> = HashSet::new();
+
+    for tree in mod_trees {
+        collect_definitions(tree, &mut defined);
+        linked.extend(tree.linked.iter().cloned());
+    }
+
+    // Depth one, matching how reachability is measured elsewhere: a skin's own dependency
+    // list, not the whole transitive graph. Deeper would cost a great deal for effects a
+    // skin does not itself name.
+    for path in linked {
+        if let Some(tree) = game_bin(&path) {
+            collect_definitions(&tree, &mut defined);
+        }
+    }
+
+    defined
+}
+
+fn collect_definitions(tree: &hematite_types::bin::BinTree, out: &mut HashSet<u32>) {
+    for obj in tree.objects.values() {
+        if obj.class_hash.0 == VFX_SYSTEM_DEFINITION {
+            out.insert(obj.path_hash.0);
+        }
+    }
+}
+
+/// Whether these definitions include the effect with this name.
+///
+/// An effect's entry key is the FNV-1a of its lowercased name. This is a key lookup, not a
+/// path lookup: there is no file at an effect's name, so asking the filesystem answered
+/// "missing" for every effect that ever existed.
+pub fn is_effect_defined(defined: &HashSet<u32>, name: &str) -> bool {
+    defined.contains(&crate::strings::fnv1a_hash(&name.to_ascii_lowercase()))
+}
+
 /// Count referenced gameplay effects and how many are missing.
 ///
-/// `referenced` is every effect name a BIN points at; `is_defined` answers whether the
-/// effect exists. Only names naming a particle are considered at all.
+/// `referenced` is every effect name a BIN points at; `is_defined` answers whether some
+/// BIN defines an object under that name's entry key. Only names naming a particle are
+/// considered, and only those that are effects rather than the files they draw with.
 pub fn measure<'a>(
     referenced: impl Iterator<Item = &'a str>,
     champion: &str,
@@ -200,6 +283,12 @@ pub fn measure<'a>(
             }
             dead.insert(lower);
         }
+    }
+
+    if !dead.is_empty() {
+        let mut names: Vec<&String> = dead.iter().collect();
+        names.sort();
+        tracing::debug!("ability VFX considered dead: {names:?}");
     }
 
     VfxVerdict {

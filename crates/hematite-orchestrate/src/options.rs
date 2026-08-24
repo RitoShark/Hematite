@@ -37,6 +37,20 @@ pub struct FixOptions<'a> {
     /// install was found or live access was disabled — every live-game
     /// feature fails open in that case.
     pub live: Option<&'a crate::live_provider::LiveGameProvider>,
+    /// Pull missing referenced assets out of the installed game.
+    ///
+    /// Makes the mod self-contained: every `.anm`, `.skn`, `.skl`, texture and linked BIN
+    /// the mod names but does not ship is fetched from the install, following the
+    /// dependency closure until nothing new appears.
+    ///
+    /// Independent of `repath`. The pull used to be reachable only from inside the repath
+    /// pipeline, which meant a caller that did not want every path rewritten could detect a
+    /// missing animation and not fix it. Repathing is a separate decision about what the
+    /// mod's paths look like; this is about whether its assets are there at all.
+    ///
+    /// When repathing IS on, the repath pipeline runs the pull itself and this is ignored,
+    /// so the assets arrive before the paths are rewritten rather than after.
+    pub pull_missing: bool,
     /// Write the fixed files back INTO the source folder instead of a sibling
     /// `<folder>.fixed.wad.client` copy. Overwrites changed files and deletes
     /// originals that were renamed away or removed. Used by embedders (Flint)

@@ -144,7 +144,8 @@ fn detect_only_reports_fixes_and_writes_nothing() {
         relocate_combo_bins: false,
         game_wad: None,
         live: None,
-        in_place: false,
+        pull_missing: false,
+            in_place: false,
     };
 
     let result = fix_folder(
@@ -224,7 +225,8 @@ fn in_place_run_writes_to_source_no_fixed_copy() {
         relocate_combo_bins: false,
         game_wad: None,
         live: None,
-        in_place: true,
+        pull_missing: false,
+            in_place: true,
     };
 
     let result = fix_folder(

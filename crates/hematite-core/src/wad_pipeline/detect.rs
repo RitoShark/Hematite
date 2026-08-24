@@ -111,6 +111,18 @@ fn check_binary_header(bytes: &[u8], check: &BinaryHeaderCheck) -> Result<bool> 
             let width = read_u16(*width_offset);
             let height = read_u16(*height_offset);
             let block = (*block_size).max(1);
+
+            // A texture smaller than one block is fine, and 1x1, 2x2 and 4x2 are
+            // everywhere: they are the bottom of a mip chain and the shape of every
+            // placeholder. Block compression pads the partial block, and the size that
+            // faults on upload is a LARGER texture that is not a whole number of blocks
+            // across. Flagging these reported a crash on a 2x2 DXT1 that has never crashed
+            // anything, and there is nothing to fix either: cropping 2 down to a multiple
+            // of 4 gives zero, so the fixer correctly refuses and the finding never clears.
+            if width < block || height < block {
+                return Ok(false);
+            }
+
             Ok(width % block != 0 || height % block != 0)
         }
     }
@@ -191,6 +203,22 @@ mod tests {
         let check = alignment_check();
         assert!(!check_binary_header(&tex_header(120, 120, 12), &check).unwrap());
         assert!(!check_binary_header(&tex_header(24, 24, 12), &check).unwrap());
+    }
+
+    /// A texture smaller than one block is legal and common: the bottom of a mip chain,
+    /// and the shape of every placeholder. One of these was reported as a crash on a mod
+    /// that has never crashed, and the fixer cannot act on it either, so the finding could
+    /// never clear.
+    #[test]
+    fn a_texture_smaller_than_one_block_is_fine() {
+        let check = alignment_check();
+        assert!(!check_binary_header(&tex_header(2, 2, 10), &check).unwrap());
+        assert!(!check_binary_header(&tex_header(1, 1, 12), &check).unwrap());
+        assert!(!check_binary_header(&tex_header(4, 2, 10), &check).unwrap());
+        // At exactly one block it is measurable again, and 4x4 is aligned.
+        assert!(!check_binary_header(&tex_header(4, 4, 10), &check).unwrap());
+        // Larger and misaligned is still the real fault.
+        assert!(check_binary_header(&tex_header(6, 6, 10), &check).unwrap());
     }
 
     /// Only block-compressed formats have to be a whole number of blocks across.

@@ -187,6 +187,7 @@ impl ModChecker {
             relocate_combo_bins: false,
             game_wad: None,
             live: self.live.as_ref(),
+            pull_missing: false,
             in_place: false,
         };
         let result = crate::fix_folder(
@@ -282,8 +283,11 @@ impl ModChecker {
             relocate_combo_bins: false,
             game_wad: None,
             live: self.live.as_ref(),
+            // The point of a repair: a missing animation or mesh is fixed by fetching it,
+            // and the engine is looking at the installed game anyway.
+            pull_missing: true,
             in_place: true,
-            };
+        };
         let result = crate::fix_folder(
             &folder,
             &self.config,

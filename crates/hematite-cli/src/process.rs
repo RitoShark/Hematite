@@ -674,13 +674,20 @@ fn process_wad_file(
             .next()
             .unwrap_or_default();
         let references = collect_references();
+        // Whether an effect is DEFINED, not whether a file sits at its name. An effect is
+        // an entry inside a BIN; there is no file to find, so the path lookup this used to
+        // do answered "missing" for every effect in every mod.
         let game_ref = live.map(|l| l as &dyn GameProvider);
+        let defined = hematite_core::check::vfx_ratio::defined_effects(
+            early_parsed.values(),
+            |path| game_ref.and_then(|g| g.game_bin(path)),
+        );
         vfx_finding = hematite_core::check::vfx_ratio::run(
             &config.vfx_ratio,
             &config.reasons,
             references,
             &champion,
-            |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
+            |name| hematite_core::check::vfx_ratio::is_effect_defined(&defined, name),
         );
     }
 
@@ -1724,7 +1731,8 @@ fn process_wad_folder(
         game_wad: ctx.game_wad,
         live: ctx.live,
         // The CLI keeps producing the non-destructive `.fixed` copy.
-        in_place: false,
+        pull_missing: false,
+            in_place: false,
     };
     let sink = crate::ui::UiSink(&ctx.ui);
     hematite_orchestrate::fix_folder(
