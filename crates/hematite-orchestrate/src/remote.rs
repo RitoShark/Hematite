@@ -125,12 +125,27 @@ pub fn load_fix_config() -> FixConfig {
     let embedded = load_embedded_fix_config();
     if version_newer(&embedded.version, &config.version) {
         tracing::info!(
-            "Remote/cached fix config {} is older than embedded {} — using embedded",
+            "Remote/cached fix config {} is older than embedded {}; using embedded",
             config.version,
             embedded.version
         );
         return embedded;
     }
+
+    // A config with no reason catalog cannot describe a single finding, so accepting one
+    // silently turns every check into a blank report. That is worse than being out of date,
+    // and the version gate above cannot see it: a remote config can carry the same version
+    // string as the embedded one and still be missing the whole catalog, which is exactly
+    // what a not-yet-merged branch looks like from the outside.
+    if config.reasons.reasons.is_empty() && !embedded.reasons.reasons.is_empty() {
+        tracing::warn!(
+            "Remote/cached fix config {} carries no reasons; using embedded {}",
+            config.version,
+            embedded.version
+        );
+        return embedded;
+    }
+
     config
 }
 

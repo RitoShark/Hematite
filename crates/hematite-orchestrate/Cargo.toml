@@ -19,6 +19,8 @@ walkdir = "2"
 # instead of each forking its own copy of the fetch-and-fall-back logic.
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 const_format = "0.2"
+# Packed archives are unpacked to a scratch folder so both forms share one code path.
+tempfile = "3.10"
 toml = "0.8"
 
 [dev-dependencies]

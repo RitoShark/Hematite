@@ -1,5 +1,5 @@
-version = "2.3.4"
-last_updated = "2026-08-22"
+version = "2.4.0"
+last_updated = "2026-08-24"
 
 enabled_fixes = [
     "file_ref_migration",

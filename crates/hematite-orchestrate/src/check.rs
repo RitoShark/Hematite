@@ -100,32 +100,39 @@ impl ModChecker {
 
     /// Check one mod, writing nothing.
     ///
-    /// `path` is either a single `.wad.client` folder or a directory holding several. A mod
-    /// that replaces both a champion and an interface file ships two archives, and both have
-    /// to be checked or the second one's defects are invisible.
+    /// `path` is a `.wad.client` archive, packed or unpacked, or a directory holding
+    /// several. A mod that replaces both a champion and an interface file ships two
+    /// archives, and both have to be checked or the second one's defects are invisible.
+    ///
+    /// Packed archives are unpacked to a scratch directory first, so both forms go through
+    /// exactly one code path. Two paths would be two behaviours, and a launcher storing
+    /// mods packed would slowly stop matching what the CLI reports for the same file.
     pub fn check(&self, path: &Path) -> Result<CheckReport> {
-        let folders = wad_folders(path)?;
-        if folders.is_empty() {
-            anyhow::bail!(
-                "{} holds no .wad.client folder to check",
-                path.display()
-            );
+        let archives = mod_archives(path)?;
+        if archives.is_empty() {
+            anyhow::bail!("{} holds no .wad.client archive to check", path.display());
         }
+
+        // Lives until the end of the check: dropping it removes the unpacked copies.
+        let scratch = tempfile::Builder::new()
+            .prefix("hematite-check-")
+            .tempdir()
+            .context("Failed to create a scratch directory")?;
 
         let mut report = CheckReport::default();
         let mut failures = Vec::new();
-        for folder in &folders {
-            match self.check_one(folder) {
+        for archive in &archives {
+            match self.check_archive(archive, scratch.path()) {
                 Ok(one) => report.merge(one),
                 // One unreadable archive must not hide what the others say.
                 Err(e) => {
-                    tracing::warn!("check failed for {}: {e:#}", folder.display());
-                    failures.push(format!("{}: {e:#}", folder.display()));
+                    tracing::warn!("check failed for {}: {e:#}", archive.display());
+                    failures.push(format!("{}: {e:#}", archive.display()));
                 }
             }
         }
 
-        if failures.len() == folders.len() {
+        if failures.len() == archives.len() {
             anyhow::bail!("every archive failed to check: {}", failures.join("; "));
         }
         for failure in failures {
@@ -135,6 +142,40 @@ impl ModChecker {
         report.dedupe();
         report.attach_catalog(&self.config.reasons);
         Ok(report)
+    }
+
+    /// Check one archive, unpacking it first when it is a packed file.
+    fn check_archive(&self, archive: &Path, scratch: &Path) -> Result<CheckReport> {
+        if archive.is_dir() {
+            return self.check_one(archive);
+        }
+        let unpacked = self.unpack(archive, scratch)?;
+        self.check_one(&unpacked)
+    }
+
+    /// Write a packed archive out as a WAD folder under `scratch`.
+    ///
+    /// Uses the same extractor and the same folder convention the CLI writes, including the
+    /// hex fallback for chunks the dictionary cannot name, so the unpacked form is the one
+    /// the checks were built against.
+    fn unpack(&self, archive: &Path, scratch: &Path) -> Result<PathBuf> {
+        use hematite_file::wad_adapter::WadFile;
+
+        let name = archive
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("mod.wad.client");
+        // Distinct per archive: two mods can both ship a `Global.wad.client`.
+        let target = scratch.join(format!("{:016x}", hash_of(archive))).join(name);
+
+        let mut wad = WadFile::open(archive)
+            .with_context(|| format!("Failed to open {}", archive.display()))?;
+        let files = wad
+            .extract_all_files(self.hashes.as_ref())
+            .with_context(|| format!("Failed to read {}", archive.display()))?;
+        hematite_file::wad_folder::write_wad_folder(&target, &files, &[])
+            .with_context(|| format!("Failed to unpack {}", archive.display()))?;
+        Ok(target)
     }
 
     fn check_one(&self, folder: &Path) -> Result<CheckReport> {
@@ -161,31 +202,39 @@ impl ModChecker {
     }
 }
 
-/// The `.wad.client` folders under `path`, or `path` itself when it is one.
+/// Every `.wad.client` archive under `path`, packed or unpacked.
 ///
-/// Two layouts, because both turn up. A mod extracted on its own is a folder of
-/// `.wad.client` directories; a fantome unpacked keeps its own shape, `META/info.json`
-/// beside a `WAD/` holding the archives. Looking only at the top level finds nothing in the
-/// second, and a mod that reports no archives reads as a mod with nothing wrong with it.
+/// Three layouts, because all three turn up. `path` can be one archive; a folder of
+/// archives; or an unpacked fantome, which keeps `META/info.json` beside a `WAD/` holding
+/// them. Looking only at the top level finds nothing in the third, and a mod that reports
+/// no archives reads as a mod with nothing wrong with it.
 ///
-/// Never recursive past those two levels. A WAD folder contains its own directory tree, and
-/// descending into it would treat `assets/` as another archive.
-fn wad_folders(path: &Path) -> Result<Vec<PathBuf>> {
+/// Packed and unpacked are both accepted because both are real: the CLI is handed downloads,
+/// a launcher may store either. Never recursive past those two levels. A WAD folder contains
+/// its own directory tree, and descending into it would treat `assets/` as another archive.
+fn mod_archives(path: &Path) -> Result<Vec<PathBuf>> {
+    if path.is_file() {
+        return if is_wad_name(path) {
+            Ok(vec![path.to_path_buf()])
+        } else {
+            anyhow::bail!("{} is not a .wad.client archive", path.display())
+        };
+    }
     if !path.is_dir() {
-        anyhow::bail!("{} is not a folder", path.display());
+        anyhow::bail!("{} does not exist", path.display());
     }
     if is_wad_folder(path) {
         return Ok(vec![path.to_path_buf()]);
     }
 
     let mut out = Vec::new();
-    collect_wad_folders(path, &mut out)
+    collect_archives(path, &mut out)
         .with_context(|| format!("Failed to read {}", path.display()))?;
 
     // The fantome convention. Case-insensitive because the directory is written by whatever
     // packed the mod.
     if let Some(wad_dir) = child_named(path, "wad") {
-        let _ = collect_wad_folders(&wad_dir, &mut out);
+        let _ = collect_archives(&wad_dir, &mut out);
     }
 
     out.sort();
@@ -193,14 +242,29 @@ fn wad_folders(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn collect_wad_folders(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+fn collect_archives(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)?.flatten() {
         let child = entry.path();
-        if child.is_dir() && is_wad_folder(&child) {
+        if is_wad_name(&child) {
             out.push(child);
         }
     }
     Ok(())
+}
+
+/// A stable per-path key, so two archives with the same file name unpack side by side.
+fn hash_of(path: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Whether this name is a `.wad.client`, whatever it is on disk.
+fn is_wad_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_lowercase().ends_with(".wad.client"))
 }
 
 /// A subdirectory with this name, matched without regard to case.
@@ -218,9 +282,7 @@ fn child_named(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn is_wad_folder(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.to_lowercase().ends_with(".wad.client"))
+    path.is_dir() && is_wad_name(path)
 }
 
 #[cfg(test)]
@@ -240,7 +302,7 @@ mod tests {
             dir.path(),
             &["Jhin.wad.client", "Global.wad.client", "META", "notes"],
         );
-        let found = wad_folders(dir.path()).unwrap();
+        let found = mod_archives(dir.path()).unwrap();
         assert_eq!(found.len(), 2);
         assert!(found.iter().all(|p| is_wad_folder(p)));
     }
@@ -251,7 +313,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wad = dir.path().join("Jhin.wad.client");
         std::fs::create_dir_all(wad.join("data/characters")).unwrap();
-        assert_eq!(wad_folders(&wad).unwrap(), vec![wad]);
+        assert_eq!(mod_archives(&wad).unwrap(), vec![wad]);
     }
 
     /// A WAD folder's own subdirectories are its content, not more archives.
@@ -259,7 +321,7 @@ mod tests {
     fn the_search_does_not_descend_into_an_archive() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("A.wad.client/nested.wad.client")).unwrap();
-        let found = wad_folders(dir.path()).unwrap();
+        let found = mod_archives(dir.path()).unwrap();
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with("A.wad.client"));
     }
@@ -273,7 +335,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("WAD/UI.wad.client/ASSETS")).unwrap();
         std::fs::create_dir_all(dir.path().join("WAD/Global.wad.client")).unwrap();
 
-        let found = wad_folders(dir.path()).unwrap();
+        let found = mod_archives(dir.path()).unwrap();
         assert_eq!(found.len(), 2, "both archives under WAD/");
     }
 
@@ -282,7 +344,27 @@ mod tests {
     fn the_wad_folder_name_is_matched_without_case() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("wad/UI.wad.client")).unwrap();
-        assert_eq!(wad_folders(dir.path()).unwrap().len(), 1);
+        assert_eq!(mod_archives(dir.path()).unwrap().len(), 1);
+    }
+
+    /// A packed archive is as valid an input as an unpacked one.
+    #[test]
+    fn a_packed_archive_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let packed = dir.path().join("WAD/Jhin.wad.client");
+        std::fs::create_dir_all(packed.parent().unwrap()).unwrap();
+        std::fs::write(&packed, b"RW").unwrap();
+        assert_eq!(mod_archives(dir.path()).unwrap(), vec![packed.clone()]);
+        assert_eq!(mod_archives(&packed).unwrap(), vec![packed]);
+    }
+
+    /// Two mods can both ship a `Global.wad.client`, so the scratch key is per path.
+    #[test]
+    fn two_archives_with_one_name_get_different_scratch_keys() {
+        let a = Path::new("/mods/one/Global.wad.client");
+        let b = Path::new("/mods/two/Global.wad.client");
+        assert_ne!(hash_of(a), hash_of(b));
+        assert_eq!(hash_of(a), hash_of(a));
     }
 
     /// A mod with archives in both places yields each exactly once.
@@ -292,7 +374,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("Jhin.wad.client")).unwrap();
         std::fs::create_dir_all(dir.path().join("WAD/UI.wad.client")).unwrap();
 
-        let found = wad_folders(dir.path()).unwrap();
+        let found = mod_archives(dir.path()).unwrap();
         assert_eq!(found.len(), 2);
     }
 
@@ -300,21 +382,21 @@ mod tests {
     fn a_folder_with_no_archive_yields_nothing() {
         let dir = tempfile::tempdir().unwrap();
         make(dir.path(), &["META", "assets"]);
-        assert!(wad_folders(dir.path()).unwrap().is_empty());
+        assert!(mod_archives(dir.path()).unwrap().is_empty());
     }
 
     #[test]
-    fn a_file_is_not_a_mod_folder() {
+    fn a_file_that_is_not_an_archive_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("mod.fantome");
         std::fs::write(&file, b"").unwrap();
-        assert!(wad_folders(&file).is_err());
+        assert!(mod_archives(&file).is_err());
     }
 
     #[test]
     fn the_extension_match_ignores_case() {
         let dir = tempfile::tempdir().unwrap();
         make(dir.path(), &["Jhin.WAD.CLIENT"]);
-        assert_eq!(wad_folders(dir.path()).unwrap().len(), 1);
+        assert_eq!(mod_archives(dir.path()).unwrap().len(), 1);
     }
 }
