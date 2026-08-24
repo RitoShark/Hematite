@@ -62,7 +62,7 @@ pub fn apply_replace(
         for obj in ctx.tree.objects.values() {
             for hash in obj.properties.keys() {
                 if let Some(field_name) = ctx.hashes.resolve_field(FieldHash(*hash)) {
-                    if filter.is_match(field_name) {
+                    if filter.is_match(&field_name) {
                         hashes.insert(*hash);
                     }
                 }
@@ -95,8 +95,8 @@ pub fn apply_rename(ctx: &mut FixContext, pattern_str: &str, replacement: &str) 
             .keys()
             .filter_map(|&hash| {
                 let field_name = ctx.hashes.resolve_field(FieldHash(hash))?;
-                if pattern.is_match(field_name) {
-                    let new_name = pattern.replace(field_name, replacement).to_string();
+                if pattern.is_match(&field_name) {
+                    let new_name = pattern.replace(&field_name, replacement).to_string();
                     let new_hash = fnv1a_hash(&new_name);
                     Some((hash, new_hash, new_name))
                 } else {

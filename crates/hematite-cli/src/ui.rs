@@ -54,6 +54,13 @@ impl Mode {
 #[derive(Clone)]
 pub struct UiReporter {
     bar: Option<ProgressBar>,
+    /// Whether this reporter prints anything at all.
+    ///
+    /// The bar being absent is not the same as being silent: `Quiet` and `Verbose` both
+    /// run without one but still want their lines. Without this flag every message fell
+    /// through to `eprintln!`, so a batch of concurrent workers interleaved per-mod
+    /// chatter over the summary that was the whole point of the run.
+    silent: bool,
 }
 
 impl UiReporter {
@@ -76,12 +83,32 @@ impl UiReporter {
                 Some(pb)
             }
         };
-        Self { bar }
+        Self {
+            bar,
+            silent: matches!(mode, Mode::Silent),
+        }
+    }
+
+    /// Print one line, through the bar when there is one.
+    ///
+    /// The single place output leaves this type, so `Silent` only has to be honoured
+    /// once instead of at every call site.
+    fn emit(&self, line: String) {
+        if self.silent {
+            return;
+        }
+        match &self.bar {
+            Some(bar) => bar.println(line),
+            None => eprintln!("{line}"),
+        }
     }
 
     /// Silent reporter — handy for tests / non-interactive callers.
     pub fn silent() -> Self {
-        Self { bar: None }
+        Self {
+            bar: None,
+            silent: true,
+        }
     }
 
     /// Switch the bar from spinner-style to a determinate bar with the
@@ -129,10 +156,7 @@ impl UiReporter {
             ),
             _ => format!("  {} {}", "✓".bright_green().bold(), name.bright_white()),
         };
-        match &self.bar {
-            Some(bar) => bar.println(line),
-            None => eprintln!("{line}"),
-        }
+        self.emit(line);
     }
 
     /// Print a yellow-tinted "! note" above the bar — used for
@@ -143,10 +167,7 @@ impl UiReporter {
             "!".bright_yellow().bold(),
             message.bright_white()
         );
-        match &self.bar {
-            Some(bar) => bar.println(line),
-            None => eprintln!("{line}"),
-        }
+        self.emit(line);
     }
 
     /// Wipe the bar from the screen. Call when the session is done so

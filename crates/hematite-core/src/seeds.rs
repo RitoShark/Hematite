@@ -75,6 +75,24 @@ pub fn order_with_primary(mut seeds: Vec<SkinSeed>, primary: &SkinSeed) -> Vec<S
     prefixed
 }
 
+/// Character folder a BIN path belongs to, e.g. `jhintrap` for
+/// `data/characters/jhintrap/skins/skin0.bin`.
+///
+/// Deliberately looser than [`parse_skin_path`]: it accepts any path under a character
+/// folder rather than only a `skins/skinN.bin`, so callers can ask "whose character is
+/// this" about animation and other non-skin BINs too.
+pub fn character_of(path: &str) -> Option<String> {
+    let lower = path.to_lowercase();
+    let rest = lower
+        .strip_prefix("data/characters/")
+        .or_else(|| lower.strip_prefix("assets/characters/"))?;
+    let name = rest.split('/').next()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
+}
+
 fn parse_skin_path(path: &str) -> Option<SkinSeed> {
     let lower = path.to_lowercase();
     let rest = lower

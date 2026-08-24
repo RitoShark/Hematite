@@ -32,16 +32,21 @@ pub trait BinProvider: Send + Sync {
 /// All reverse lookups (name → hash) must be pre-computed at load time for O(1) access.
 pub trait HashProvider: Send + Sync {
     /// Resolve a class hash to its type name (e.g. 0xABCD → "SkinCharacterDataProperties").
-    fn resolve_type(&self, hash: TypeHash) -> Option<&str>;
+    ///
+    /// Owned rather than borrowed so an implementation can answer from the database on
+    /// demand instead of holding every name in memory. The dictionary is millions of
+    /// entries and a run touches a tiny fraction of it, so preloading was over a second
+    /// of startup on every invocation. Every caller copied the result anyway.
+    fn resolve_type(&self, hash: TypeHash) -> Option<String>;
 
     /// Resolve a field hash to its field name (e.g. 0x1234 → "UnitHealthBarStyle").
-    fn resolve_field(&self, hash: FieldHash) -> Option<&str>;
+    fn resolve_field(&self, hash: FieldHash) -> Option<String>;
 
     /// Resolve an entry path hash to its path string.
-    fn resolve_entry(&self, hash: PathHash) -> Option<&str>;
+    fn resolve_entry(&self, hash: PathHash) -> Option<String>;
 
     /// Resolve a game asset hash (xxhash64) to its path.
-    fn resolve_game_path(&self, hash: GameHash) -> Option<&str>;
+    fn resolve_game_path(&self, hash: GameHash) -> Option<String>;
 
     /// Reverse lookup: type name → type hash.
     fn type_hash(&self, name: &str) -> Option<TypeHash>;
@@ -81,7 +86,28 @@ pub trait GameProvider: Send + Sync {
     fn pull_raw(&self, path: &str) -> Option<Vec<u8>>;
     /// Pull AND parse a game BIN into hematite's tree model.
     /// (Parsing happens inside the impl — core stays format-free.)
-    fn game_bin(&self, path: &str) -> Option<BinTree>;
+    ///
+    /// Shared rather than owned so implementations can memoise. Resolving a dead link
+    /// walks up to 64 game BINs, and that walk repeats for every BIN in the mod, so the
+    /// same handful of game files were being decompressed and parsed hundreds of times
+    /// per run. Every caller only reads the tree.
+    fn game_bin(&self, path: &str) -> Option<std::sync::Arc<BinTree>>;
+
+    /// Entry-key hashes of every shader definition the installed game ships.
+    ///
+    /// A material links its shader by entry key, so this is exactly the set of link
+    /// targets that resolve at load time. A link to anything else makes the engine's
+    /// resolver return null and takes the game down with it.
+    ///
+    /// `None` means the shader data could not be read, which callers MUST treat as
+    /// "cannot validate" and never as "no shaders exist": an empty set would mark every
+    /// shader link in every mod dead.
+    ///
+    /// Defaults to `None` so a provider that cannot supply it simply does not support
+    /// the check rather than silently failing it.
+    fn shader_defs(&self) -> Option<std::sync::Arc<std::collections::HashSet<u32>>> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +122,7 @@ mod game_provider_tests {
         fn pull_raw(&self, _p: &str) -> Option<Vec<u8>> {
             None
         }
-        fn game_bin(&self, _p: &str) -> Option<BinTree> {
+        fn game_bin(&self, _p: &str) -> Option<std::sync::Arc<BinTree>> {
             None
         }
     }

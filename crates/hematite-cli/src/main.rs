@@ -18,6 +18,8 @@
 
 mod args;
 mod banner;
+mod batch;
+mod crashcheck;
 mod hash_downloader;
 mod interactive;
 mod logging;
@@ -94,6 +96,99 @@ fn main() {
     }
 }
 
+/// Crash-check every mod in a directory, sharing the loaded data across all of them.
+///
+/// The hash dictionary, the game index and the shader set are identical for every mod and
+/// cost over a second to build, so a per-mod process pays that over and over. Here they
+/// are built once and the mods are checked concurrently on top.
+fn run_batch(cli: &Cli, dir: &Path) -> Result<()> {
+    if !dir.is_dir() {
+        anyhow::bail!("--batch expects a directory: {}", dir.display());
+    }
+
+    let mods = batch::discover(dir)?;
+    if mods.is_empty() {
+        eprintln!("No mods found in {}", dir.display());
+        return Ok(());
+    }
+
+    let config = remote::load_fix_config();
+    let champion_list = remote::load_champion_list();
+    let champions = CharacterRelations::from_champion_list(&champion_list);
+    let selected_fixes = args::collect_selected_fixes(cli);
+
+    let ui = ui::UiReporter::new(ui::Mode::from_args(&cli.verbosity, cli.json));
+    let hashes = {
+        let _t = hematite_core::timing::span("load hash dictionary (shared)");
+        process::load_hash_provider(&ui)?
+    };
+
+    let live: Option<hematite_orchestrate::LiveGameProvider> = if cli.no_live {
+        None
+    } else {
+        let install = match &cli.game_path {
+            Some(p) => hematite_live::LeagueInstall::from_path(p).ok(),
+            None => hematite_live::detect_league(),
+        };
+        install.map(|i| {
+            hematite_orchestrate::LiveGameProvider::new(
+                hematite_live::GameIndex::new(&i),
+                Box::new(hematite_file::bin_adapter::FileBinProvider::new()),
+            )
+        })
+    };
+
+    let started = Instant::now();
+    let entries = batch::run(
+        &mods,
+        &config,
+        &selected_fixes,
+        &champions,
+        &hashes,
+        live.as_ref(),
+        cli.jobs,
+    );
+    let elapsed = started.elapsed();
+
+    if cli.json {
+        let payload: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "mod": e.path.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+                    "path": e.path,
+                    "error": e.error,
+                    "report": e.report,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        batch::print_summary(&entries);
+        eprintln!(
+            "  checked {} mod(s) in {:.2}s ({:.0} ms each)",
+            entries.len(),
+            elapsed.as_secs_f64(),
+            elapsed.as_secs_f64() * 1000.0 / entries.len().max(1) as f64
+        );
+    }
+
+    if cli.timings {
+        eprintln!("
+phase timings (slowest first)");
+        for (label, total, calls) in hematite_core::timing::report() {
+            let ms = total.as_secs_f64() * 1000.0;
+            if ms < 1.0 {
+                continue;
+            }
+            eprintln!("  {ms:9.1} ms  x{calls:<5} {label}");
+        }
+        eprintln!();
+    }
+
+    Ok(())
+}
+
 /// Same as falling through to the bottom of `main`, but used by entry
 /// modes that own their own pacing (the interactive loop ends with
 /// "bye!" — a "press enter" afterwards would be obnoxious).
@@ -158,7 +253,15 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
     register_deep_repair_assets();
 
     // Initialize logging
-    logging::init(&cli.verbosity, cli.json);
+    // A batch prints one summary line per mod. Per-mod INFO chatter from seven concurrent
+    // workers interleaves into noise above it, so the default verbosity drops to quiet
+    // here; an explicit -v still turns it back on.
+    let verbosity = if cli.batch.is_some() && matches!(cli.verbosity, args::Verbosity::Normal) {
+        args::Verbosity::Quiet
+    } else {
+        cli.verbosity.clone()
+    };
+    logging::init(&verbosity, cli.json);
 
     // -- Version gate -------------------------------------------------------
     // Runs before input validation so `--check-version` works without
@@ -199,8 +302,14 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         );
     }
 
+    // Batch mode short-circuits: it builds the shared providers itself, because the
+    // whole point is loading them once rather than once per mod.
+    if let Some(dir) = cli.batch.clone() {
+        return run_batch(&cli, &dir);
+    }
+
     // After `--check-version` short-circuit, `input` is guaranteed present
-    // by clap's `required_unless_present` (or by the entry-mode dispatcher
+    // by clap's `required_unless_present_any` (or by the entry-mode dispatcher
     // for the interactive / drag-drop paths).
     let input = cli
         .input
@@ -270,7 +379,9 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         logging::log_session_start(&input.to_string_lossy(), &selected_fixes);
     }
 
-    let dry_run = cli.dry_run || cli.check;
+    // `--crashcheck` reports only. It must never write, so it implies dry-run for the
+    // same reason `--check` does.
+    let dry_run = cli.dry_run || cli.check || cli.crashcheck;
 
     // Build repath options.
     // Priority: CLI flags > fix_config.json repath section.
@@ -312,24 +423,42 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
     // or no-flags default (both populate it through `ALL_FIX_IDS`).
     let relocate_combo_bins = selected_fixes.iter().any(|f| f == "combo_bin_relocate");
 
+    let _t_process = hematite_core::timing::span("process_input (total)");
     let result = process::process_input(
         input,
         &config,
         &selected_fixes,
         &champions,
         dry_run,
-        cli.check,
+        cli.check || cli.crashcheck,
         repath_opts.as_ref(),
         ui,
         live_provider.as_ref(),
         restore_anm,
         cli.game_wad.as_deref(),
         relocate_combo_bins,
+        None,
     )?;
 
     let duration = start_time.elapsed().as_secs_f64();
 
-    if cli.check {
+    if cli.timings {
+        drop(_t_process);
+        eprintln!("
+phase timings (slowest first)");
+        for (label, total, calls) in hematite_core::timing::report() {
+            let ms = total.as_secs_f64() * 1000.0;
+            if ms < 1.0 {
+                continue;
+            }
+            eprintln!("  {ms:9.1} ms  x{calls:<5} {label}");
+        }
+        eprintln!();
+    }
+
+    if cli.crashcheck {
+        crashcheck::report(&result, cli.json)?;
+    } else if cli.check {
         if cli.json {
             output_check_json(&result)?;
         } else {

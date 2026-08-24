@@ -141,6 +141,154 @@ pub fn fix_folder(
         bin_chunks.len()
     );
 
+    // Parse every BIN once, up front. Three phases need every tree (the load graph, the
+    // loose-texture measurement, the referenced-asset collection) and the fix pipeline
+    // then parses them all again. Parsing dominates a run, so it happens exactly once.
+    let early_parsed: std::collections::HashMap<String, hematite_types::bin::BinTree> = {
+        let _t = hematite_core::timing::span("parse mod BINs (shared)");
+        bin_chunks
+            .iter()
+            .filter_map(|(_, path, bytes)| {
+                bin_provider
+                    .parse_bytes(bytes)
+                    .ok()
+                    .map(|tree| (path.clone(), tree))
+            })
+            .collect()
+    };
+    let early_linked: std::collections::HashMap<u64, Vec<String>> = bin_chunks
+        .iter()
+        .filter_map(|(h, path, _)| early_parsed.get(path).map(|t| (*h, t.linked.clone())))
+        .collect();
+
+    // Prime the game index from what the mod actually contains, before and independently
+    // of seed discovery.
+    //
+    // Seed discovery only recognises `skins/skinN.bin`. A mod that ships animation or
+    // interface BINs without one is reported "binless" and primes nothing, so every
+    // "does the game have this?" question answers no and every base-game reference reads
+    // as missing. That produced confident, wrong crash reports on healthy mods.
+    //
+    // Two sources, both idempotent and TOC-only:
+    //   - the shared interface WADs, where HUD and interface BINs live regardless of
+    //     which WAD name a mod packages them under;
+    //   - the WAD of every character the mod names in a path, whether or not it ships a
+    //     skin BIN for them.
+    if let Some(live) = live {
+        live.with_index(|idx| {
+            idx.add_shared_wads();
+        });
+
+        let characters: std::collections::BTreeSet<String> = all_files
+            .iter()
+            .filter_map(|(_, path, _)| hematite_core::seeds::character_of(path))
+            .collect();
+        if !characters.is_empty() {
+            tracing::debug!(
+                "priming game WADs for {} character(s) named by mod paths",
+                characters.len()
+            );
+            for character in &characters {
+                live.with_index(|idx| {
+                    idx.add_champion(character);
+                });
+            }
+        }
+    }
+
+    // Work out which BINs the mod actually loads, and which of its BINs are animation
+    // BINs. Both are per-WAD facts, computed once here rather than per rule.
+    //
+    // Roots are the skin BINs this WAD ships; edges are each root's declared
+    // dependencies, followed once. `None` means it could not be determined, and every
+    // consumer then behaves as if everything loads.
+    let (reachability, animation_bins) = {
+        let present: std::collections::HashSet<u64> =
+            all_files.iter().map(|(h, _, _)| *h).collect();
+        let by_hash: std::collections::HashMap<u64, &Vec<u8>> =
+            all_files.iter().map(|(h, _, bytes)| (*h, bytes)).collect();
+
+        let characters: Vec<String> = all_files
+            .iter()
+            .filter_map(|(_, path, _)| hematite_core::seeds::character_of(path))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let refs: Vec<&str> = characters.iter().map(|s| s.as_str()).collect();
+
+        let reach = hematite_core::reachability::compute(
+            &refs,
+            |p| wad_path_hash(p),
+            |h| present.contains(&h),
+            |h| {
+                early_linked.get(&h).cloned().or_else(|| {
+                    by_hash.get(&h).and_then(|b| {
+                        hematite_core::reachability::dependencies_of(&bin_provider, b)
+                    })
+                })
+            },
+        );
+
+        let mut anim: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+        for c in &characters {
+            anim.extend(hematite_core::reachability::animation_bin_slots(c, |p| {
+                wad_path_hash(p)
+            }));
+        }
+        match &reach {
+            Some(r) => tracing::debug!(
+                "load graph: {} reachable chunk(s), {} skin root(s)",
+                r.reachable.len(),
+                r.skin_slot.len()
+            ),
+            None => tracing::debug!("load graph unknown: every BIN will be inspected"),
+        }
+        (reach, anim)
+    };
+
+    let mut loose_texture_verdict = None;
+
+    // Loose textures the game will never load.
+    //
+    // Runs BEFORE the WAD pipeline, which converts `.dds` to `.tex` in the working set.
+    // Measured afterwards the archive appears to ship only `.tex` and the count is zero,
+    // which reads as a clean mod. This is a question about what the mod SHIPPED.
+    if config.loose_textures.enabled {
+        let cfg = &config.loose_textures;
+        let paths: Vec<String> = all_files.iter().map(|(_, p, _)| p.clone()).collect();
+
+        let mut defines_skin = false;
+        let mut referenced_lower: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for tree in early_parsed.values() {
+            if tree.objects.values().any(|o| {
+                o.class_hash.0
+                    == hematite_core::check::loose_textures::SKIN_CHARACTER_DATA_PROPERTIES
+            }) {
+                defines_skin = true;
+            }
+            referenced_lower.extend(
+                hematite_core::walk::string_refs(tree)
+                    .into_iter()
+                    .map(|s| s.to_lowercase().replace('\\', "/")),
+            );
+        }
+
+        if let Some(verdict) = hematite_core::check::loose_textures::evaluate(
+            &paths,
+            defines_skin,
+            |p| referenced_lower.contains(p),
+            &wad_provider,
+            live.map(|l| l as &dyn GameProvider),
+            &cfg.excluded_segments,
+            cfg.min_textures,
+            cfg.threshold,
+        ) {
+            tracing::info!("loose textures: {}", verdict.describe());
+            loose_texture_verdict = Some(verdict);
+        }
+    }
+
     // Discover champion/skin seeds from the resolved TOC.
     {
         let seeds =
@@ -179,12 +327,26 @@ pub fn fix_folder(
 
     let mut total_result = ProcessResult::default();
     total_result.fixes_applied += combo_bins_relocated;
+
+    // Emit the loose-texture verdict now that the report exists.
+    if let Some(verdict) = &loose_texture_verdict {
+        total_result.report.push(
+            hematite_types::diagnostic::Diagnostic::new(
+                &config.reasons,
+                config.loose_textures.reason.clone(),
+                "loose_textures",
+            )
+            .with_detail(verdict.describe()),
+        );
+        total_result.report.attach_catalog(&config.reasons);
+    }
     let mut shared_files_to_remove = Vec::new();
 
     // === WAD-LEVEL PIPELINE ===
     progress.stage("Detecting WAD-level issues…");
     tracing::debug!("Running WAD-level pipeline...");
-    let referenced = collect_referenced_assets(&all_files, &bin_provider);
+    let referenced =
+        collect_referenced_assets_cached(&all_files, &bin_provider, &early_parsed);
     let wad_output = wad_pipeline::apply_wad_fixes(
         &all_files,
         config,
@@ -211,6 +373,17 @@ pub fn fix_folder(
         );
         total_result.fixes_applied += wad_fix.files_affected;
     }
+
+    // WAD-level findings. A binless mod has no BIN tree, so these are the only
+    // diagnostics it can ever produce.
+    total_result
+        .report
+        .diagnostics
+        .extend(wad_output.diagnostics.iter().cloned());
+    // Attach here too: the BIN pipeline attaches its own catalog entries, but these
+    // arrive afterwards, so without this a WAD-only finding renders as a bare reason id
+    // with no title, explanation or remedy.
+    total_result.report.attach_catalog(&config.reasons);
 
     // Perform file format conversions
     let mut converter_registry = ConverterRegistry::new();
@@ -357,11 +530,20 @@ pub fn fix_folder(
     }
 
     // === LINKED BIN RESOLUTION (BFS) ===
+    // Take over the trees parsed up front rather than parsing every BIN a second time.
     let mut parsed_bins: std::collections::HashMap<String, hematite_types::bin::BinTree> =
-        std::collections::HashMap::new();
+        early_parsed;
     let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
     for (_hash, path, bytes) in &bin_chunks {
+        if let Some(tree) = parsed_bins.get(path) {
+            for linked_path in &tree.linked {
+                if !parsed_bins.contains_key(linked_path) {
+                    queue.push_back(linked_path.clone());
+                }
+            }
+            continue;
+        }
         match bin_provider.parse_bytes(bytes) {
             Ok(tree) => {
                 for linked_path in &tree.linked {
@@ -415,6 +597,7 @@ pub fn fix_folder(
     ui.stage("Applying fixes…");
     ui.set_length(bin_chunks.len() as u64);
 
+
     for (_, path, _) in &bin_chunks {
         let Some(tree) = parsed_bins.remove(path) else {
             ui.tick();
@@ -432,6 +615,11 @@ pub fn fix_folder(
             shader_validator: shader_validator.as_ref(),
             game: live.map(|l| l as &dyn GameProvider),
             additional_bins: Vec::new(),
+            scope: hematite_core::context::BinScope {
+                chunk_hash: wad_path_hash(path),
+                reachable: reachability.as_ref(),
+                animation_bins: Some(&animation_bins),
+            },
         };
 
         let result = apply_fixes(&mut ctx, config, selected_fixes, dry_run);
@@ -802,6 +990,20 @@ pub fn collect_referenced_assets(
     all_files: &[(u64, String, Vec<u8>)],
     bin_provider: &FileBinProvider,
 ) -> hematite_core::wad_pipeline::ReferencedAssets {
+    collect_referenced_assets_cached(all_files, bin_provider, &Default::default())
+}
+
+/// As [`collect_referenced_assets`], reusing trees that were already parsed.
+///
+/// Parsing dominates a run, and several phases each need every BIN's tree: this, the
+/// load graph, and the loose-texture measurement, before the fix pipeline parses them all
+/// again. Sharing one parse removes that repetition; a path absent from `parsed` is still
+/// parsed here, so the cache is an optimisation rather than a precondition.
+pub fn collect_referenced_assets_cached(
+    all_files: &[(u64, String, Vec<u8>)],
+    bin_provider: &FileBinProvider,
+    parsed: &std::collections::HashMap<String, hematite_types::bin::BinTree>,
+) -> hematite_core::wad_pipeline::ReferencedAssets {
     use hematite_core::traits::BinProvider;
     let mut out = hematite_core::wad_pipeline::ReferencedAssets::default();
     for (_, path, bytes) in all_files {
@@ -809,13 +1011,21 @@ pub fn collect_referenced_assets(
         if !is_bin {
             continue;
         }
-        let Ok(tree) = bin_provider.parse_bytes(bytes) else {
-            continue;
+        let owned;
+        let tree = match parsed.get(path) {
+            Some(t) => t,
+            None => match bin_provider.parse_bytes(bytes) {
+                Ok(t) => {
+                    owned = t;
+                    &owned
+                }
+                Err(_) => continue,
+            },
         };
         out.paths
-            .extend(repath_core::collect_bin_asset_paths(&tree, false));
+            .extend(repath_core::collect_bin_asset_paths(tree, false));
         out.hashes
-            .extend(repath_core::collect_bin_asset_hashes(&tree));
+            .extend(repath_core::collect_bin_asset_hashes(tree));
     }
     out
 }
@@ -1046,6 +1256,7 @@ pub fn apply_post_repath_fixes(
             shader_validator: None,
             game: None,
             additional_bins: Vec::new(),
+            scope: Default::default(),
         };
 
         let mut result = hematite_core::pipeline::apply_fixes_in_phase(
@@ -1083,6 +1294,14 @@ pub fn prime_champion_wads<'a>(
     champions: &CharacterRelations,
     seed_champions: impl Iterator<Item = &'a str>,
 ) {
+    // Interface and HUD BINs live in the shared WADs, not in any champion's. A binless
+    // interface mod has no seed champion at all, so without this the loop below runs
+    // zero times and the index stays empty: precisely the mods that need replaced-BIN
+    // checking would get none.
+    live.with_index(|idx| {
+        idx.add_shared_wads();
+    });
+
     for champ in seed_champions {
         live.with_index(|idx| {
             idx.add_champion(champ);

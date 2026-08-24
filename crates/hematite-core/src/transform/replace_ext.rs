@@ -44,7 +44,7 @@ impl PropertyVisitor for ExtensionReplacer<'_> {
             let Some(name) = self.hashes.resolve_field(hash) else {
                 return VisitResult::Skip;
             };
-            if !re.is_match(name) {
+            if !re.is_match(&name) {
                 return VisitResult::Skip;
             }
         }

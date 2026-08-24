@@ -58,6 +58,19 @@ pub fn fnv1a_hash(name: &str) -> u32 {
     hash
 }
 
+/// Resolve a config-supplied class/field/key token to its 32-bit hash.
+///
+/// Accepts either a readable name or a literal `0x…` hex hash, because some classes are
+/// only ever seen as hashes: no dictionary names them, so a config could not reference
+/// them at all if names were the only accepted form.
+pub fn resolve_hash_token(token: &str) -> u32 {
+    token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        .unwrap_or_else(|| fnv1a_hash(token))
+}
+
 /// Normalize a WAD asset path (lowercase, forward slashes).
 pub fn normalize_wad_path(path: &str) -> String {
     path.to_lowercase().replace('\\', "/")

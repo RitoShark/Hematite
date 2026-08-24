@@ -18,7 +18,7 @@
 use crate::context::FixContext;
 use crate::detect::detect_issue;
 use crate::transform::apply_transform;
-use hematite_types::config::{DetectionRule, FixConfig, FixPhase};
+use hematite_types::config::{DetectionRule, FixConfig, FixPhase, TransformAction};
 use hematite_types::result::{AppliedFix, ProcessResult};
 
 /// Run the standard-phase fixes against a BIN tree.
@@ -77,9 +77,33 @@ pub fn apply_fixes_in_phase(
             continue;
         }
 
+        // A rule whose prerequisites are missing detects nothing *knowable*, which is not
+        // the same as detecting nothing. Recording the skip keeps "we checked and it is
+        // fine" distinguishable from "we could not check".
+        if let Some(why) = crate::check::skip_reason(fix_rule, ctx) {
+            tracing::debug!("skipping '{}': {:?}", fix_id, why);
+            // Only checks that could have REPORTED something count as gaps. A fix-only
+            // rule that cannot run has repaired nothing, which is worth a log, but
+            // listing it under "could not check" implies the mod went unverified in some
+            // way it did not.
+            if fix_rule.reason.is_some() {
+                result.report.mark_skipped(fix_id.clone(), why);
+            }
+            continue;
+        }
+
+        let rule_started = std::time::Instant::now();
         let detected = detect_issue(&fix_rule.detect, ctx);
+        crate::timing::record(&format!("rule:{fix_id}"), rule_started.elapsed());
 
         if detected {
+            // Record the player-facing finding BEFORE the transform runs. Afterwards the
+            // defect is gone from the tree and the evidence with it, so a repair run
+            // could no longer say what it repaired.
+            for diagnostic in crate::check::diagnose_fired_rule(fix_id, fix_rule, config, ctx) {
+                result.report.push(diagnostic);
+            }
+
             if dry_run {
                 result.fixes_applied += 1;
                 result.applied_fixes.push(AppliedFix {
@@ -88,6 +112,11 @@ pub fn apply_fixes_in_phase(
                     changes_count: 0,
                     file_path: ctx.file_path.clone(),
                 });
+            } else if matches!(fix_rule.apply, TransformAction::ReportOnly) {
+                // Detected and reported. There is no repair to attempt, so this is
+                // neither an applied fix nor a failure. Counting it either way would
+                // misreport: as a fix it claims a repair that never happened, as a
+                // failure it buries a correct finding in the error list.
             } else {
                 let entry_type = extract_entry_type(&fix_rule.detect);
                 let changes = apply_transform(&fix_rule.apply, ctx, entry_type);
@@ -111,6 +140,7 @@ pub fn apply_fixes_in_phase(
     }
 
     result.files_removed = ctx.files_to_remove.len() as u32;
+    result.report.attach_catalog(&config.reasons);
     result
 }
 
@@ -136,6 +166,12 @@ fn extract_entry_type(rule: &DetectionRule) -> Option<&str> {
         DetectionRule::RecursiveStringExtensionNotInWad { .. }
         | DetectionRule::EntryTypeExistsAny { .. }
         | DetectionRule::BnkVersionNotIn { .. }
-        | DetectionRule::ClassFieldIsString { .. } => None,
+        | DetectionRule::ClassFieldIsString { .. }
+        // Compares whole entry sets across two trees rather than filtering objects of
+        // one type, so there is no single entry type to extract.
+        | DetectionRule::ReplacedBinEntryDiff { .. }
+        | DetectionRule::DeadShaderLink
+        | DetectionRule::DeadAssetReference { .. }
+        | DetectionRule::StaleCharacterRecord { .. } => None,
     }
 }

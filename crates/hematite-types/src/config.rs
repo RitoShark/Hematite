@@ -30,6 +30,59 @@ pub struct FixConfig {
     /// When `enabled` is true, drag-and-drop runs repathing automatically.
     #[serde(default)]
     pub repath: RepathConfig,
+    /// Reason catalog: what each defect means to the player, how severe it is, and what
+    /// to do about it. Lives in the same config as the rules so a new crash class needs
+    /// no rebuild. Rules reference entries here by id through [`FixRule::reason`].
+    #[serde(default)]
+    pub reasons: crate::diagnostic::ReasonCatalog,
+    /// Settings for the whole-archive loose-texture measurement.
+    #[serde(default)]
+    pub loose_textures: LooseTextureConfig,
+}
+
+/// Settings for the loose-texture measurement.
+///
+/// Not a `FixRule` because it is not answerable one BIN at a time: it needs the archive's
+/// file list, every BIN's references and the game's contents at once. The parameters
+/// still live in config so the threshold can be corrected without a rebuild.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LooseTextureConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Reason id reported when the share is exceeded.
+    #[serde(default = "default_loose_texture_reason")]
+    pub reason: String,
+    /// Below this many textures the sample is too small to be meaningful.
+    #[serde(default = "default_min_textures")]
+    pub min_textures: usize,
+    /// Share that must be EXCEEDED. Exactly this value does not fire.
+    #[serde(default = "default_loose_threshold")]
+    pub threshold: f32,
+    /// Path fragments that mark interface art rather than skin art.
+    #[serde(default)]
+    pub excluded_segments: Vec<String>,
+}
+
+fn default_loose_texture_reason() -> String {
+    "loose_textures_unplayable".to_string()
+}
+fn default_min_textures() -> usize {
+    6
+}
+fn default_loose_threshold() -> f32 {
+    0.80
+}
+
+impl Default for LooseTextureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            reason: default_loose_texture_reason(),
+            min_textures: default_min_textures(),
+            threshold: default_loose_threshold(),
+            excluded_segments: Vec::new(),
+        }
+    }
 }
 
 impl FixConfig {
@@ -107,9 +160,42 @@ pub struct FixRule {
     /// Legacy per-rule flag — ignored when the config has `enabled_fixes`.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// How important the FIX is (`critical`/`high`/`medium`/`low`). This is the repair
+    /// priority axis. How badly the defect affects the *player* is a separate question,
+    /// answered by the reason catalog via [`FixRule::reason`].
     pub severity: String,
     #[serde(default)]
     pub phase: FixPhase,
+    /// Reason id (see the `[reasons.*]` catalog) reported when this rule fires in check
+    /// mode. Absent means the rule is fix-only and contributes no diagnostic, which is
+    /// correct for cosmetic normalisations that are not defects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Report only for a main character, never for a subcharacter form.
+    ///
+    /// Some properties are shipped by Riot only on the playable champion, and its
+    /// summoned forms (a trap, an egg, a minion) legitimately lack them. A rule that
+    /// checks such a property fires on every form and reports a defect on the ones that
+    /// are correct: a mod with one subcharacter produces dozens of false findings, which
+    /// is how a checker teaches people to ignore it.
+    ///
+    /// Affects reporting only. The transform still runs, so this changes what the user
+    /// is told, not what gets repaired.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub main_character_only: bool,
+    /// Report only for BINs the mod actually loads.
+    ///
+    /// A mod built by cloning a champion WAD carries skin BINs it never wires up. Those
+    /// are never loaded, so a dead reference inside one cannot crash anything, and
+    /// reporting it describes a defect that can never occur.
+    ///
+    /// Has no effect when load information is unavailable: the gate may only shrink what
+    /// is reported, never grow it. Animation BINs are always inspected regardless, since
+    /// a clip in one that nothing links is latent rather than absent.
+    ///
+    /// Affects reporting only; the transform still runs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loaded_bins_only: bool,
     pub detect: DetectionRule,
     pub apply: TransformAction,
 }
@@ -212,6 +298,129 @@ pub enum DetectionRule {
     /// BIN predates the migration.
     #[serde(rename = "class_field_is_string")]
     ClassFieldIsString { targets: Vec<ClassFieldTarget> },
+
+    /// This BIN REPLACES a stock game BIN wholesale, and the replacement's entry set
+    /// differs from the vanilla one in a way the client cannot survive.
+    ///
+    /// Two failure shapes, both from a mod authored against an older client:
+    /// - **Dropped**: the replacement omits by-key entries the live client still looks
+    ///   up. Unguarded consumers dereference the missing entry and crash. A few classes
+    ///   null-check the lookup, so the same drop is only bugged-but-playable there,
+    ///   which is why severity is per target rather than per rule.
+    /// - **Added**: the replacement carries stale entries of a class whose layout the
+    ///   client has since changed, and the UI builder faults walking the old layout.
+    ///
+    /// Requires a `GameProvider`: without the vanilla BIN to diff against there is
+    /// nothing to compare, so the rule fails open.
+    #[serde(rename = "replaced_bin_entry_diff")]
+    ReplacedBinEntryDiff { targets: Vec<ReplacedBinTarget> },
+
+    /// A material links a shader entry that exists in neither the installed game nor the
+    /// mod itself. The engine's resolver returns null for the missing shader and the
+    /// game goes down, with no error code recorded, so this cannot be diagnosed from the
+    /// client log afterwards.
+    ///
+    /// Takes no parameters: the valid set is read from the installed game at runtime
+    /// rather than configured, because it changes every patch. A shipped list would
+    /// either go stale and invent crashes or go missing and disable the check.
+    ///
+    /// Requires a `GameProvider` that can supply the shader set; without one the rule
+    /// reports as skipped rather than clean.
+    #[serde(rename = "dead_shader_link")]
+    DeadShaderLink,
+
+    /// The mod replaces a character's root record with one older than the live schema.
+    ///
+    /// Differential, not absolute: a field counts as missing only when the LIVE record
+    /// has it and the mod's does not, so a field Riot removes never becomes a finding.
+    /// `critical_field` names the one whose absence changes the verdict, because losing
+    /// the ability binding makes a champion unplayable while losing a stat field only
+    /// makes it wrong.
+    #[serde(rename = "stale_character_record")]
+    StaleCharacterRecord {
+        /// Record class to compare, name or `0x…` hex.
+        entry_type: String,
+        /// Fields whose absence counts as drift.
+        fields: Vec<String>,
+        /// Field whose absence reports `critical_reason` instead of the rule's reason.
+        #[serde(default)]
+        critical_field: Option<String>,
+        /// Reason used when `critical_field` is the missing one.
+        #[serde(default)]
+        critical_reason: Option<String>,
+    },
+
+    /// An asset path the BIN names exists in neither the mod nor the base game.
+    ///
+    /// Distinct from `recursive_string_extension_not_in_wad`, which asks only whether
+    /// the MOD ships the file. Most references in a mod point at base-game assets it
+    /// deliberately does not duplicate, so for a crash check the mod-only question
+    /// reports mostly healthy references and buries the dead ones.
+    ///
+    /// Requires a `GameProvider`; without one there is no way to separate "the game
+    /// ships it" from "nothing ships it", and the rule reports as skipped.
+    #[serde(rename = "dead_asset_reference")]
+    DeadAssetReference {
+        /// Extensions to match, including the dot. Case-insensitive.
+        extensions: Vec<String>,
+        /// When non-empty, only paths starting with one of these are considered. Leave
+        /// empty to also catch repathed mods, which invent prefixes of their own.
+        #[serde(default)]
+        path_prefixes: Vec<String>,
+        /// Character-name fragments whose assets are reported with
+        /// [`DetectionRule::DeadAssetReference::downgrade_reason`] instead of the rule's
+        /// own reason.
+        ///
+        /// Minions, turrets and structures load only with the map variant that uses
+        /// them, so a missing asset there is conditional rather than certain. Without
+        /// this a single themed map mod produces dozens of crash findings for defects
+        /// that may never be reached. Deliberately exclude `inhibitor` and `nexus`:
+        /// those always load.
+        #[serde(default)]
+        downgrade_markers: Vec<String>,
+        /// Reason used for assets matching `downgrade_markers`. Absent means no
+        /// downgrade, and every dead asset reports at the rule's own severity.
+        #[serde(default)]
+        downgrade_reason: Option<String>,
+        /// Reason used when the BIN holding the reference is not loaded as the mod is
+        /// used.
+        ///
+        /// An animation BIN no shipped skin links is not reached in normal play: the
+        /// clip is dead only for someone selecting the original skin with the mod
+        /// active. Real, but conditional, and calling it a crash overstates it.
+        #[serde(default)]
+        latent_reason: Option<String>,
+    },
+}
+
+/// Which direction of entry-set difference is dangerous for one class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplacedBinMode {
+    /// Flag keys the mod BIN adds that the vanilla BIN does not have (stale layout).
+    Added,
+    /// Flag keys the vanilla BIN has that the mod BIN drops (missing on lookup).
+    Dropped,
+}
+
+/// One class-keyed rule for [`DetectionRule::ReplacedBinEntryDiff`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplacedBinTarget {
+    /// Class to compare. Accepts a name (FNV1a-hashed, lowercased) or a `0x…` hex hash.
+    pub class: String,
+    /// Human label for the class, used in the diagnostic detail when the class is only
+    /// known by hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub mode: ReplacedBinMode,
+    /// When non-empty, only these entry keys count. Some classes crash only on a handful
+    /// of core keys and are harmless for the rest, so flagging every difference would
+    /// bury the real signal in noise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lethal_keys: Vec<String>,
+    /// Reason reported for this target, overriding the rule's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// How to fix a detected issue.
@@ -368,14 +577,41 @@ pub enum TransformAction {
     /// action must set `"phase": "post_repath"`.
     #[serde(rename = "retype_string_to_file")]
     RetypeStringToFile { targets: Vec<ClassFieldTarget> },
+
+    /// Report the defect and change nothing.
+    ///
+    /// Some crash classes have no safe automatic repair: an outdated map geometry
+    /// format needs a real format migration, and a replaced UI bin that dropped entries
+    /// needs the author to put them back. Before this existed every rule had to claim a
+    /// fix, which forced unfixable defects to either be left undetected or be given a
+    /// sham transform that reports success without repairing anything. Detection is
+    /// valuable on its own: warning the player is the whole point of a crash check.
+    #[serde(rename = "report_only")]
+    ReportOnly,
 }
 
 /// A (class, field) pair targeted by type-migration rules. Both accept a
 /// name (FNV1a-hashed, lowercased) or a `0x…` hex hash.
+///
+/// ## Why the (class, field) pairing matters
+/// The migration is **per property, not per file extension**, and the same field name
+/// can migrate in one class and stay a string in another: `texture` is a string in
+/// VfxSystem/particle classes but a file reference in mesh classes. Keying on the field
+/// hash alone cannot represent that and corrupts VFX; keying on the pair does.
+///
+/// ## Per-target reporting
+/// A single migration rule covers many properties whose defects differ in kind: an
+/// unreadable animation path is a crash, an unresolved HUD asset merely renders missing.
+/// [`ClassFieldTarget::reason`] lets one rule report both, since each reason carries its
+/// own severity in the catalog.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassFieldTarget {
     pub class: String,
     pub field: String,
+    /// Reason id reported for this target specifically, overriding the rule's own
+    /// `reason`. Absent means inherit from the rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Parent embed to create when EnsureField target doesn't exist yet.
@@ -413,6 +649,14 @@ pub struct WadFixRule {
     #[serde(default = "default_true")]
     pub enabled: bool,
     pub severity: String,
+    /// Reason id (see the `[reasons.*]` catalog) reported when this rule fires in check
+    /// mode. Absent means fix-only.
+    ///
+    /// WAD-level rules need this as much as BIN-level ones: a binless mod that ships a
+    /// single malformed texture has no BIN for a tree rule to inspect, so a WAD rule is
+    /// the *only* thing standing between the player and a crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub detect: WadDetectionRule,
     pub apply: WadTransformAction,
 }

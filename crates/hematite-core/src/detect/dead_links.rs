@@ -44,10 +44,19 @@ fn resolve_target_class_hash(ctx: &FixContext, target: &EntryValidationTarget) -
 /// Returns a map of path_hash -> BinObject for every object seen, capped at
 /// `CLOSURE_CAP` visited bins. Shared by the `pull_entries_from_game`
 /// transform and pullability-gated detection so both see the same world.
+// PERFORMANCE NOTE: this is the single most expensive thing in a run (measured at 1.8s
+// on one fixture), because every miss pulls, decompresses and parses up to a few dozen
+// game BINs, and the pullability gate asks for the same closure a second time on the
+// same BIN. Memoising it is tempting and was tried: a process-wide cache keyed on the
+// seeds plus the linked list is UNSOUND, because it silently shares one game install's
+// answer with another provider, and it barely helps anyway since the key includes the
+// per-BIN seed and so rarely repeats. The fix is a cache owned by the GameProvider, whose
+// identity is the thing the answer actually depends on.
 pub(crate) fn build_game_closure(
     ctx: &FixContext,
     game: &dyn crate::traits::GameProvider,
 ) -> HashMap<u32, hematite_types::bin::BinObject> {
+    let _span = crate::timing::span("game closure");
     let mut closure: HashMap<u32, hematite_types::bin::BinObject> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
@@ -282,7 +291,7 @@ pub(crate) fn collect_dead_links(
     // alive at runtime even though no mod file and no `linked:` entry names
     // them. Dropping those killed voice lines.
     if let Some(game) = ctx.game {
-        let mut game_bin_cache: HashMap<String, Option<BinTree>> = HashMap::new();
+        let mut game_bin_cache: HashMap<String, Option<std::sync::Arc<BinTree>>> = HashMap::new();
         let mut queue: std::collections::VecDeque<String> =
             ctx.tree.linked.iter().cloned().collect();
         for seed in crate::seeds::discover_seeds([ctx.file_path.as_str()]) {
@@ -359,16 +368,16 @@ mod tests {
     }
 
     impl HashProvider for MockHashProvider {
-        fn resolve_type(&self, _hash: TypeHash) -> Option<&str> {
+        fn resolve_type(&self, _hash: TypeHash) -> Option<String> {
             None
         }
-        fn resolve_field(&self, _hash: FieldHash) -> Option<&str> {
+        fn resolve_field(&self, _hash: FieldHash) -> Option<String> {
             None
         }
-        fn resolve_entry(&self, _hash: PathHash) -> Option<&str> {
+        fn resolve_entry(&self, _hash: PathHash) -> Option<String> {
             None
         }
-        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<&str> {
+        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<String> {
             None
         }
         fn type_hash(&self, name: &str) -> Option<TypeHash> {
@@ -404,7 +413,7 @@ mod tests {
         fn pull_raw(&self, _path: &str) -> Option<Vec<u8>> {
             None
         }
-        fn game_bin(&self, _path: &str) -> Option<BinTree> {
+        fn game_bin(&self, _path: &str) -> Option<std::sync::Arc<BinTree>> {
             None
         }
     }
@@ -421,8 +430,8 @@ mod tests {
         fn pull_raw(&self, _path: &str) -> Option<Vec<u8>> {
             None
         }
-        fn game_bin(&self, path: &str) -> Option<BinTree> {
-            self.bins.get(path).cloned()
+        fn game_bin(&self, path: &str) -> Option<std::sync::Arc<BinTree>> {
+            self.bins.get(path).cloned().map(std::sync::Arc::new)
         }
     }
 
@@ -471,6 +480,7 @@ mod tests {
             shader_validator: None,
             game: None,
             additional_bins: Vec::new(),
+            scope: Default::default(),
         }
     }
 

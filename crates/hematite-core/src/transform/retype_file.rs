@@ -148,6 +148,94 @@ fn recurse_detect(value: &PropertyValue, targets: &HashSet<(u32, u32)>) -> bool 
     }
 }
 
+/// Per-target detection for check mode.
+///
+/// [`detect`] answers "does this tree need the migration at all", which is everything a
+/// fix needs to know. A check needs more: it has to say WHICH property is unmigrated,
+/// because the consequence differs per property. An unreadable animation path is a hard
+/// crash; an unresolved interface asset merely renders missing. One rule therefore has
+/// to be able to report two different severities, and that requires knowing the hit.
+///
+/// Returns each matching `(class_hash, field_hash)` pair mapped to one example string
+/// value, used as the diagnostic's `detail` so the UI can name the offending asset.
+pub fn detect_hits(
+    tree: &BinTree,
+    targets: &[ClassFieldTarget],
+) -> BTreeMap<(u32, u32), String> {
+    let resolved = resolve_targets(targets);
+    let mut hits = BTreeMap::new();
+    for obj in tree.objects.values() {
+        for prop in obj.properties.values() {
+            let key = (obj.class_hash.0, prop.name_hash.0);
+            if resolved.contains(&key) {
+                if let Some(sample) = first_string(&prop.value) {
+                    hits.entry(key).or_insert(sample);
+                }
+            }
+            recurse_hits(&prop.value, &resolved, &mut hits);
+        }
+    }
+    hits
+}
+
+fn recurse_hits(
+    value: &PropertyValue,
+    targets: &HashSet<(u32, u32)>,
+    hits: &mut BTreeMap<(u32, u32), String>,
+) {
+    match value {
+        PropertyValue::Struct(s) | PropertyValue::Embedded(s) => {
+            for p in s.properties.values() {
+                let key = (s.class_hash.0, p.name_hash.0);
+                if targets.contains(&key) {
+                    if let Some(sample) = first_string(&p.value) {
+                        hits.entry(key).or_insert(sample);
+                    }
+                }
+                recurse_hits(&p.value, targets, hits);
+            }
+        }
+        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
+            for v in items {
+                recurse_hits(v, targets, hits);
+            }
+        }
+        PropertyValue::Optional(inner) => {
+            if let Some(v) = inner.as_ref().as_ref() {
+                recurse_hits(v, targets, hits);
+            }
+        }
+        PropertyValue::Map(entries) => {
+            for (_k, v) in entries {
+                recurse_hits(v, targets, hits);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// First string inside a value, looking through the container shapes the migration uses.
+///
+/// An OPTION's single value can be a bare scalar rather than a one-element list, so both
+/// shapes have to be handled or scalar options read as empty.
+fn first_string(value: &PropertyValue) -> Option<String> {
+    match value {
+        PropertyValue::String(s) => Some(s.clone()),
+        PropertyValue::Optional(inner) => inner.as_ref().as_ref().and_then(first_string),
+        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
+            items.iter().find_map(first_string)
+        }
+        PropertyValue::Map(entries) => entries.iter().find_map(|(_k, v)| first_string(v)),
+        _ => None,
+    }
+}
+
+/// Resolve one target to the `(class_hash, field_hash)` key [`detect_hits`] returns, so
+/// callers can map a hit back to the config entry that declared it.
+pub fn target_key(target: &ClassFieldTarget) -> (u32, u32) {
+    (resolve_hash(&target.class), resolve_hash(&target.field))
+}
+
 fn holds_string(value: &PropertyValue) -> bool {
     match value {
         PropertyValue::String(_) => true,
@@ -171,6 +259,7 @@ mod tests {
         ClassFieldTarget {
             class: class.to_string(),
             field: field.to_string(),
+            reason: None,
         }
     }
 

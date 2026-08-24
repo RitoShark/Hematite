@@ -552,17 +552,17 @@ mod tests {
     struct StubHashes(std::collections::HashMap<u64, String>);
 
     impl HashProvider for StubHashes {
-        fn resolve_type(&self, _: hematite_types::hash::TypeHash) -> Option<&str> {
+        fn resolve_type(&self, _: hematite_types::hash::TypeHash) -> Option<String> {
             None
         }
-        fn resolve_field(&self, _: hematite_types::hash::FieldHash) -> Option<&str> {
+        fn resolve_field(&self, _: hematite_types::hash::FieldHash) -> Option<String> {
             None
         }
-        fn resolve_entry(&self, _: hematite_types::hash::PathHash) -> Option<&str> {
+        fn resolve_entry(&self, _: hematite_types::hash::PathHash) -> Option<String> {
             None
         }
-        fn resolve_game_path(&self, hash: hematite_types::hash::GameHash) -> Option<&str> {
-            self.0.get(&hash.0).map(String::as_str)
+        fn resolve_game_path(&self, hash: hematite_types::hash::GameHash) -> Option<String> {
+            self.0.get(&hash.0).cloned()
         }
         fn type_hash(&self, _: &str) -> Option<hematite_types::hash::TypeHash> {
             None

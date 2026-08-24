@@ -18,7 +18,7 @@ use crate::detect::dead_links::collect_dead_links;
 use crate::factory::matches_json;
 use crate::filter;
 use crate::traits::{HashProvider, WadProvider};
-use crate::walk::extract_strings;
+use crate::walk::string_refs;
 use hematite_types::bin::{BinTree, PropertyValue, StructValue};
 use hematite_types::config::{DetectionRule, EntryValidationTarget};
 use hematite_types::hash::FieldHash;
@@ -93,6 +93,22 @@ pub fn detect_issue(rule: &DetectionRule, ctx: &FixContext) -> bool {
         DetectionRule::ClassFieldIsString { targets } => {
             crate::transform::retype_file::detect(tree, targets)
         }
+
+        DetectionRule::ReplacedBinEntryDiff { targets } => {
+            crate::detect::replaced_bin::detect(ctx, targets)
+        }
+
+        DetectionRule::DeadShaderLink => crate::detect::shader_link::detect(ctx),
+
+        DetectionRule::StaleCharacterRecord {
+            entry_type, fields, ..
+        } => crate::detect::stale_character::detect(ctx, entry_type, fields),
+
+        DetectionRule::DeadAssetReference {
+            extensions,
+            path_prefixes,
+            ..
+        } => crate::detect::dead_asset::detect(ctx, extensions, path_prefixes),
     }
 }
 
@@ -313,7 +329,7 @@ fn detect_string_extension_not_in_wad(
     _fields: &[String],
     extension: &str,
 ) -> bool {
-    let strings = extract_strings(tree);
+    let strings = string_refs(tree);
 
     for s in strings {
         if s.to_lowercase().ends_with(extension) && !wad.has_path(&s) {
@@ -330,7 +346,7 @@ fn detect_recursive_extension(
     extension: &str,
     path_prefixes: &[String],
 ) -> bool {
-    let strings = extract_strings(tree);
+    let strings = string_refs(tree);
 
     for s in strings {
         let lower = s.to_lowercase();
@@ -369,7 +385,7 @@ fn detect_entry_type_exists(
         if let Some(type_name) = hashes.resolve_type(obj.class_hash) {
             if entry_types
                 .iter()
-                .any(|et| et.eq_ignore_ascii_case(type_name))
+                .any(|et| et.eq_ignore_ascii_case(&type_name))
             {
                 return true;
             }
@@ -628,19 +644,19 @@ mod tests {
     }
 
     impl HashProvider for MockHashProvider {
-        fn resolve_type(&self, hash: TypeHash) -> Option<&str> {
-            self.type_names.get(&hash.0).map(|s| s.as_str())
+        fn resolve_type(&self, hash: TypeHash) -> Option<String> {
+            self.type_names.get(&hash.0).cloned()
         }
 
-        fn resolve_field(&self, hash: FieldHash) -> Option<&str> {
-            self.field_names.get(&hash.0).map(|s| s.as_str())
+        fn resolve_field(&self, hash: FieldHash) -> Option<String> {
+            self.field_names.get(&hash.0).cloned()
         }
 
-        fn resolve_entry(&self, _hash: PathHash) -> Option<&str> {
+        fn resolve_entry(&self, _hash: PathHash) -> Option<String> {
             None
         }
 
-        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<&str> {
+        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<String> {
             None
         }
 
@@ -693,6 +709,7 @@ mod tests {
             shader_validator: None,
             game: None,
             additional_bins: Vec::new(),
+            scope: Default::default(),
         }
     }
 
@@ -798,7 +815,7 @@ mod tests {
             fn pull_raw(&self, _p: &str) -> Option<Vec<u8>> {
                 None
             }
-            fn game_bin(&self, _p: &str) -> Option<BinTree> {
+            fn game_bin(&self, _p: &str) -> Option<std::sync::Arc<BinTree>> {
                 None
             }
         }

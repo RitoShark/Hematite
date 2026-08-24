@@ -105,20 +105,20 @@ impl Default for TxtHashProvider {
 }
 
 impl HashProvider for TxtHashProvider {
-    fn resolve_type(&self, hash: TypeHash) -> Option<&str> {
-        self.types.get(&hash.0).map(|s| s.as_str())
+    fn resolve_type(&self, hash: TypeHash) -> Option<String> {
+        self.types.get(&hash.0).cloned()
     }
 
-    fn resolve_field(&self, hash: FieldHash) -> Option<&str> {
-        self.fields.get(&hash.0).map(|s| s.as_str())
+    fn resolve_field(&self, hash: FieldHash) -> Option<String> {
+        self.fields.get(&hash.0).cloned()
     }
 
-    fn resolve_entry(&self, hash: PathHash) -> Option<&str> {
-        self.entries.get(&hash.0).map(|s| s.as_str())
+    fn resolve_entry(&self, hash: PathHash) -> Option<String> {
+        self.entries.get(&hash.0).cloned()
     }
 
-    fn resolve_game_path(&self, hash: GameHash) -> Option<&str> {
-        self.game_paths.get(&hash.0).map(|s| s.as_str())
+    fn resolve_game_path(&self, hash: GameHash) -> Option<String> {
+        self.game_paths.get(&hash.0).cloned()
     }
 
     fn type_hash(&self, name: &str) -> Option<TypeHash> {

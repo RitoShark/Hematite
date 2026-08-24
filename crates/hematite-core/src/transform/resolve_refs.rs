@@ -213,23 +213,23 @@ mod tests {
         fn pull_raw(&self, _path: &str) -> Option<Vec<u8>> {
             None
         }
-        fn game_bin(&self, _path: &str) -> Option<BinTree> {
+        fn game_bin(&self, _path: &str) -> Option<std::sync::Arc<BinTree>> {
             None
         }
     }
 
     struct NoopHashProvider;
     impl HashProvider for NoopHashProvider {
-        fn resolve_type(&self, _hash: TypeHash) -> Option<&str> {
+        fn resolve_type(&self, _hash: TypeHash) -> Option<String> {
             None
         }
-        fn resolve_field(&self, _hash: FieldHash) -> Option<&str> {
+        fn resolve_field(&self, _hash: FieldHash) -> Option<String> {
             None
         }
-        fn resolve_entry(&self, _hash: PathHash) -> Option<&str> {
+        fn resolve_entry(&self, _hash: PathHash) -> Option<String> {
             None
         }
-        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<&str> {
+        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<String> {
             None
         }
         fn type_hash(&self, _name: &str) -> Option<TypeHash> {
@@ -290,6 +290,7 @@ mod tests {
             shader_validator: None,
             game: None,
             additional_bins: Vec::new(),
+            scope: Default::default(),
         }
     }
 

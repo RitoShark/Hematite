@@ -71,7 +71,25 @@ pub fn apply_wad_fixes(
             continue;
         }
 
-        let result = apply_single_fix(files, fix_rule, fix_id, hash_provider, referenced)?;
+        let mut result = apply_single_fix(files, fix_rule, fix_id, hash_provider, referenced)?;
+
+        // Report before merging, while this rule's own affected-file counts are still
+        // separable from every other rule's.
+        if let Some(reason) = fix_rule.reason.as_deref() {
+            for applied in &result.applied_fixes {
+                if applied.files_affected == 0 {
+                    continue;
+                }
+                let mut diagnostic =
+                    hematite_types::diagnostic::Diagnostic::new(&config.reasons, reason, fix_id);
+                if applied.files_affected > 1 {
+                    diagnostic =
+                        diagnostic.with_detail(format!("{} files", applied.files_affected));
+                }
+                result.diagnostics.push(diagnostic);
+            }
+        }
+
         output.merge(result);
     }
 
@@ -95,6 +113,12 @@ pub struct WadFixOutput {
     pub files_to_add: Vec<FileAddition>,
     /// Applied fixes summary
     pub applied_fixes: Vec<WadFixResult>,
+    /// Player-facing findings from WAD-level rules.
+    ///
+    /// A binless mod (a lone replaced texture, say) has no BIN tree for a tree rule to
+    /// walk, so WAD-level detection is the only thing that can report it. Without
+    /// diagnostics here such a mod checks out clean no matter how broken it is.
+    pub diagnostics: Vec<hematite_types::diagnostic::Diagnostic>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +155,7 @@ impl WadFixOutput {
         self.files_to_rename.extend(other.files_to_rename);
         self.files_to_add.extend(other.files_to_add);
         self.applied_fixes.extend(other.applied_fixes);
+        self.diagnostics.extend(other.diagnostics);
     }
 }
 
@@ -265,16 +290,16 @@ mod tests {
 
     struct NoHashes;
     impl HashProvider for NoHashes {
-        fn resolve_type(&self, _: TypeHash) -> Option<&str> {
+        fn resolve_type(&self, _: TypeHash) -> Option<String> {
             None
         }
-        fn resolve_field(&self, _: FieldHash) -> Option<&str> {
+        fn resolve_field(&self, _: FieldHash) -> Option<String> {
             None
         }
-        fn resolve_entry(&self, _: PathHash) -> Option<&str> {
+        fn resolve_entry(&self, _: PathHash) -> Option<String> {
             None
         }
-        fn resolve_game_path(&self, _: GameHash) -> Option<&str> {
+        fn resolve_game_path(&self, _: GameHash) -> Option<String> {
             None
         }
         fn type_hash(&self, _: &str) -> Option<TypeHash> {
@@ -297,6 +322,7 @@ mod tests {
             description: String::new(),
             enabled: true,
             severity: "low".to_string(),
+            reason: None,
             detect: WadDetectionRule::FileExtension {
                 extension: ".anm".to_string(),
                 binary_check: None,

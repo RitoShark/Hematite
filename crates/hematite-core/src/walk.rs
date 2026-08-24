@@ -146,29 +146,54 @@ fn walk_struct(struct_val: &mut StructValue, visitor: &mut dyn PropertyVisitor) 
     mutations
 }
 
-/// Extract all string values from a BinTree (read-only).
+/// Every string value in a BIN tree, borrowed.
 ///
-/// Replaces `bin_parser.rs::extract_all_strings()` from the old codebase.
-pub fn extract_strings(tree: &BinTree) -> Vec<String> {
-    struct StringCollector {
-        strings: Vec<String>,
-    }
-
-    impl PropertyVisitor for StringCollector {
-        fn visit_string(&mut self, value: &str, _field_hash: FieldHash) -> VisitResult {
-            self.strings.push(value.to_string());
-            VisitResult::Skip
+/// This used to deep-clone the entire tree purely to satisfy [`walk_tree`]'s `&mut`
+/// signature, then copy every string out of the clone and throw the clone away. Several
+/// rules call it once per BIN, so a mod with hundreds of BINs paid for hundreds of whole
+/// tree copies. Measured, the clone and the string copies cost roughly ten times the
+/// traversal they existed to perform.
+pub fn string_refs(tree: &BinTree) -> Vec<&str> {
+    let mut out = Vec::new();
+    for obj in tree.objects.values() {
+        for prop in obj.properties.values() {
+            collect_strings(&prop.value, &mut out);
         }
     }
+    out
+}
 
-    let mut collector = StringCollector {
-        strings: Vec::new(),
-    };
+fn collect_strings<'a>(value: &'a PropertyValue, out: &mut Vec<&'a str>) {
+    match value {
+        PropertyValue::String(s) => out.push(s.as_str()),
+        PropertyValue::Struct(s) | PropertyValue::Embedded(s) => {
+            for prop in s.properties.values() {
+                collect_strings(&prop.value, out);
+            }
+        }
+        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
+            for v in items {
+                collect_strings(v, out);
+            }
+        }
+        PropertyValue::Optional(inner) => {
+            if let Some(v) = inner.as_ref().as_ref() {
+                collect_strings(v, out);
+            }
+        }
+        PropertyValue::Map(entries) => {
+            for (k, v) in entries {
+                collect_strings(k, out);
+                collect_strings(v, out);
+            }
+        }
+        _ => {}
+    }
+}
 
-    let mut tree_clone = tree.clone();
-    walk_tree(&mut tree_clone, &mut collector);
-
-    collector.strings
+/// Owned copy of every string value. Prefer [`string_refs`] unless ownership is needed.
+pub fn extract_strings(tree: &BinTree) -> Vec<String> {
+    string_refs(tree).into_iter().map(str::to_string).collect()
 }
 
 #[cfg(test)]

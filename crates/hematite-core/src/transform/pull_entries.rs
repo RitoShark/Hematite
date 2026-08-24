@@ -166,16 +166,16 @@ mod tests {
     }
 
     impl HashProvider for MockHashProvider {
-        fn resolve_type(&self, _hash: TypeHash) -> Option<&str> {
+        fn resolve_type(&self, _hash: TypeHash) -> Option<String> {
             None
         }
-        fn resolve_field(&self, _hash: FieldHash) -> Option<&str> {
+        fn resolve_field(&self, _hash: FieldHash) -> Option<String> {
             None
         }
-        fn resolve_entry(&self, _hash: PathHash) -> Option<&str> {
+        fn resolve_entry(&self, _hash: PathHash) -> Option<String> {
             None
         }
-        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<&str> {
+        fn resolve_game_path(&self, _hash: hematite_types::hash::GameHash) -> Option<String> {
             None
         }
         fn type_hash(&self, name: &str) -> Option<TypeHash> {
@@ -213,8 +213,8 @@ mod tests {
         fn pull_raw(&self, _path: &str) -> Option<Vec<u8>> {
             None
         }
-        fn game_bin(&self, path: &str) -> Option<BinTree> {
-            self.bins.get(path).cloned()
+        fn game_bin(&self, path: &str) -> Option<std::sync::Arc<BinTree>> {
+            self.bins.get(path).cloned().map(std::sync::Arc::new)
         }
     }
 
@@ -227,7 +227,7 @@ mod tests {
         fn pull_raw(&self, _path: &str) -> Option<Vec<u8>> {
             None
         }
-        fn game_bin(&self, _path: &str) -> Option<BinTree> {
+        fn game_bin(&self, _path: &str) -> Option<std::sync::Arc<BinTree>> {
             None
         }
     }
@@ -318,6 +318,7 @@ mod tests {
             shader_validator: None,
             game: None,
             additional_bins: Vec::new(),
+            scope: Default::default(),
         }
     }
 

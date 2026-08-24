@@ -9,12 +9,14 @@
 //! - [`bin`] — BIN tree types (our abstraction over LTK's BinTree)
 //! - [`wad`] — WAD chunk metadata and modification tracking
 //! - [`config`] — Fix rule schema (deserialised from `fix_config.json`)
+//! - [`diagnostic`] — What the engine reports: severity, reason catalog, check reports
 //! - [`result`] — Processing and fix result types
 //! - [`champion`] — Champion list and character-relation lookups
 
 pub mod bin;
 pub mod champion;
 pub mod config;
+pub mod diagnostic;
 pub mod hash;
 pub mod repath;
 pub mod result;

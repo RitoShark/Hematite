@@ -32,20 +32,20 @@ const SPELL_OBJECT_CLASS_HASH: u32 = 0xDEAD_BEEF;
 struct StubHashes;
 
 impl HashProvider for StubHashes {
-    fn resolve_type(&self, hash: TypeHash) -> Option<&str> {
+    fn resolve_type(&self, hash: TypeHash) -> Option<String> {
         if hash.0 == SPELL_OBJECT_CLASS_HASH {
-            Some("SpellObject")
+            Some("SpellObject".to_string())
         } else {
             None
         }
     }
-    fn resolve_field(&self, _hash: FieldHash) -> Option<&str> {
+    fn resolve_field(&self, _hash: FieldHash) -> Option<String> {
         None
     }
-    fn resolve_entry(&self, _hash: PathHash) -> Option<&str> {
+    fn resolve_entry(&self, _hash: PathHash) -> Option<String> {
         None
     }
-    fn resolve_game_path(&self, _hash: GameHash) -> Option<&str> {
+    fn resolve_game_path(&self, _hash: GameHash) -> Option<String> {
         None
     }
     fn type_hash(&self, name: &str) -> Option<TypeHash> {

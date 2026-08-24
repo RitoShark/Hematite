@@ -24,10 +24,12 @@
 use anyhow::{Context, Result};
 use heed::types::{Bytes, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn};
+use hematite_core::strings::fnv1a_hash;
 use hematite_core::traits::HashProvider;
 use hematite_types::hash::{FieldHash, GameHash, PathHash, TypeHash};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Hash provider backed by LMDB database.
 ///
@@ -36,13 +38,23 @@ use std::path::{Path, PathBuf};
 /// map covers types / fields / entries / generic, mirroring the
 /// upstream merged-database design.
 pub struct LmdbHashProvider {
-    /// u64 xxhash64 → game asset path.
-    game_paths: HashMap<u64, String>,
-    /// u32 FNV1a → name (type / field / entry / generic — merged).
-    bin_names: HashMap<u32, String>,
-    /// Lower-cased name → hash (single reverse map serves both
-    /// `type_hash` and `field_hash`).
-    bin_name_to_hash: HashMap<String, u32>,
+    /// The open environment. Lookups run against it directly.
+    env: Env,
+    /// `u64` xxhash64 (BE) -> game asset path.
+    wad_db: Option<Database<Bytes, Str>>,
+    /// `u32` FNV1a (BE) -> type / field / entry / generic name.
+    bin_db: Option<Database<Bytes, Str>>,
+    /// Legacy four-database caches only. Those predate the merged `bin` DB and are small
+    /// and rare, so they are still read eagerly rather than growing a second lazy path.
+    legacy_bin: Option<HashMap<u32, String>>,
+    /// Answers already fetched, misses included.
+    ///
+    /// A run touches a tiny fraction of the dictionary but touches the same hashes over
+    /// and over, so this recovers nearly all of the constant-time lookup the preloaded
+    /// maps gave without paying to build them. Misses are cached too: not finding a hash
+    /// costs the same query as finding one.
+    wad_cache: Mutex<HashMap<u64, Option<Arc<str>>>>,
+    bin_cache: Mutex<HashMap<u32, Option<Arc<str>>>>,
 }
 
 impl LmdbHashProvider {
@@ -65,50 +77,106 @@ impl LmdbHashProvider {
         Self::load_from_path(&lmdb_path)
     }
 
-    /// Load hash dictionaries from a specific LMDB directory.
+    /// Hash of a BIN name, when the dictionary knows that name.
+    ///
+    /// The hash is computed rather than looked up. It used to come from a reverse map
+    /// built at load time, which meant lowercasing and allocating half a million strings
+    /// on every startup for a value that is a pure function of the name. The map is only
+    /// consulted to preserve the original contract: an unknown name resolves to `None`
+    /// rather than to a hash nothing will match.
+    fn known_hash(&self, name: &str) -> Option<u32> {
+        let hash = fnv1a_hash(name);
+        self.lookup_bin(hash).map(|_| hash)
+    }
+
+    /// Open the dictionary for on-demand lookups.
+    ///
+    /// This used to read all 2.8 million entries into memory before any work started,
+    /// costing over a second on every invocation and dominating the runtime of checking a
+    /// small mod. Nothing needs the whole dictionary: a run resolves the few thousand
+    /// hashes its own mod mentions.
     pub fn load_from_path(lmdb_dir: &Path) -> Result<Self> {
-        tracing::info!("Loading LMDB hashes from: {}", lmdb_dir.display());
+        tracing::debug!("Opening LMDB hashes at: {}", lmdb_dir.display());
 
         let env = open_env(lmdb_dir)?;
         let rtxn = env.read_txn().context("Failed to start read transaction")?;
 
-        let game_paths = load_wad_db(&env, &rtxn)?;
-        let bin_names = load_bin_db(&env, &rtxn)
-            .or_else(|new_err| {
-                // No `bin` DB → user might have a legacy 4-database
-                // cache. Try opening the old schema and merging it
-                // into the same in-memory shape.
-                tracing::debug!(
-                    "No 'bin' database (likely legacy schema); falling back to types/fields/entries — {}",
-                    new_err
-                );
-                load_legacy_bin_dbs(&env, &rtxn)
-            })
-            .context(
-                "Failed to load BIN hashes from either the current ('bin') \
-                 or legacy ('types' + 'fields' + 'entries') schema. \
-                 Delete %APPDATA%\\RitoShark\\Requirements\\Hashes\\hashes.lmdb \
-                 and re-run to redownload.",
-            )?;
+        let wad_db: Option<Database<Bytes, Str>> = env
+            .open_database(&rtxn, Some("wad"))
+            .context("Failed to query 'wad' database")?;
+        let bin_db: Option<Database<Bytes, Str>> = env
+            .open_database(&rtxn, Some("bin"))
+            .context("Failed to query 'bin' database")?;
+
+        // Only pay for the legacy read when the merged DB is genuinely absent.
+        let legacy_bin = if bin_db.is_none() {
+            tracing::debug!("No 'bin' database (legacy schema); reading types/fields/entries");
+            load_legacy_bin_dbs(&env, &rtxn).ok()
+        } else {
+            None
+        };
+
+        if wad_db.is_none() && bin_db.is_none() && legacy_bin.is_none() {
+            anyhow::bail!(
+                "LMDB has neither a 'wad'/'bin' database nor the legacy \
+                 'types'/'fields'/'entries' schema. Delete the hashes.lmdb folder under \
+                 %APPDATA%\\RitoShark\\Requirements\\Hashes and re-run to redownload."
+            );
+        }
 
         rtxn.commit().context("Failed to commit read transaction")?;
 
-        let bin_name_to_hash = bin_names
-            .iter()
-            .map(|(hash, name)| (name.to_lowercase(), *hash))
-            .collect();
-
-        tracing::info!(
-            "Loaded LMDB hashes: {} game paths, {} BIN names",
-            game_paths.len(),
-            bin_names.len()
-        );
-
         Ok(Self {
-            game_paths,
-            bin_names,
-            bin_name_to_hash,
+            env,
+            wad_db,
+            bin_db,
+            legacy_bin,
+            wad_cache: Mutex::new(HashMap::new()),
+            bin_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Look one game path up, going to the database only on a first miss.
+    fn lookup_wad(&self, hash: u64) -> Option<Arc<str>> {
+        if let Ok(cache) = self.wad_cache.lock() {
+            if let Some(hit) = cache.get(&hash) {
+                return hit.clone();
+            }
+        }
+        let db = self.wad_db?;
+        let found = self.env.read_txn().ok().and_then(|rtxn| {
+            db.get(&rtxn, &hash.to_be_bytes())
+                .ok()
+                .flatten()
+                .map(Arc::<str>::from)
+        });
+        if let Ok(mut cache) = self.wad_cache.lock() {
+            cache.insert(hash, found.clone());
+        }
+        found
+    }
+
+    /// Look one BIN name up, from the merged database or a legacy cache.
+    fn lookup_bin(&self, hash: u32) -> Option<Arc<str>> {
+        if let Some(legacy) = &self.legacy_bin {
+            return legacy.get(&hash).map(|s| Arc::from(s.as_str()));
+        }
+        if let Ok(cache) = self.bin_cache.lock() {
+            if let Some(hit) = cache.get(&hash) {
+                return hit.clone();
+            }
+        }
+        let db = self.bin_db?;
+        let found = self.env.read_txn().ok().and_then(|rtxn| {
+            db.get(&rtxn, &hash.to_be_bytes())
+                .ok()
+                .flatten()
+                .map(Arc::<str>::from)
+        });
+        if let Ok(mut cache) = self.bin_cache.lock() {
+            cache.insert(hash, found.clone());
+        }
+        found
     }
 }
 
@@ -230,44 +298,38 @@ fn read_u64_be(bytes: &[u8]) -> Option<u64> {
 // ---------------------------------------------------------------------------
 
 impl HashProvider for LmdbHashProvider {
-    fn resolve_type(&self, hash: TypeHash) -> Option<&str> {
-        self.bin_names.get(&hash.0).map(|s| s.as_str())
+    fn resolve_type(&self, hash: TypeHash) -> Option<String> {
+        self.lookup_bin(hash.0).map(|s| s.to_string())
     }
 
-    fn resolve_field(&self, hash: FieldHash) -> Option<&str> {
-        self.bin_names.get(&hash.0).map(|s| s.as_str())
+    fn resolve_field(&self, hash: FieldHash) -> Option<String> {
+        self.lookup_bin(hash.0).map(|s| s.to_string())
     }
 
-    fn resolve_entry(&self, hash: PathHash) -> Option<&str> {
-        self.bin_names.get(&hash.0).map(|s| s.as_str())
+    fn resolve_entry(&self, hash: PathHash) -> Option<String> {
+        self.lookup_bin(hash.0).map(|s| s.to_string())
     }
 
-    fn resolve_game_path(&self, hash: GameHash) -> Option<&str> {
-        self.game_paths.get(&hash.0).map(|s| s.as_str())
+    fn resolve_game_path(&self, hash: GameHash) -> Option<String> {
+        self.lookup_wad(hash.0).map(|s| s.to_string())
     }
 
     fn type_hash(&self, name: &str) -> Option<TypeHash> {
-        self.bin_name_to_hash
-            .get(&name.to_lowercase())
-            .copied()
-            .map(TypeHash)
+        self.known_hash(name).map(TypeHash)
     }
 
     fn field_hash(&self, name: &str) -> Option<FieldHash> {
-        self.bin_name_to_hash
-            .get(&name.to_lowercase())
-            .copied()
-            .map(FieldHash)
+        self.known_hash(name).map(FieldHash)
     }
 
     fn has_game_path(&self, path: &str) -> bool {
         use xxhash_rust::xxh64::xxh64;
         let normalized = path.to_lowercase().replace('\\', "/");
         let hash = xxh64(normalized.as_bytes(), 0);
-        self.game_paths.contains_key(&hash)
+        self.lookup_wad(hash).is_some()
     }
 
     fn is_loaded(&self) -> bool {
-        !self.bin_names.is_empty() || !self.game_paths.is_empty()
+        self.wad_db.is_some() || self.bin_db.is_some() || self.legacy_bin.is_some()
     }
 }

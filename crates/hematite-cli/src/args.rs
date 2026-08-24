@@ -20,6 +20,7 @@
 //! ## Output control
 //! | Flag | Effect |
 //! |------|--------|
+//! | `--crashcheck` | Report crashes/warnings with severity, never write |
 //! | `--json` | JSON output for automation |
 //! | `--dry-run` | Show what would be fixed, don't modify |
 //! | `-v <level>` | Verbosity: quiet, normal, verbose, trace |
@@ -34,7 +35,7 @@ use std::path::PathBuf;
 #[command(version)]
 pub struct Cli {
     /// Input file or directory to process. Not required for `--check-version`.
-    #[arg(required_unless_present = "check_version")]
+    #[arg(required_unless_present_any = ["check_version", "batch"])]
     pub input: Option<PathBuf>,
 
     /// Output path (default: overwrite input)
@@ -137,6 +138,31 @@ pub struct Cli {
         help = "Check mode: detect issues and report skin info without fixing"
     )]
     pub check: bool,
+
+    #[arg(
+        long,
+        help = "Crash check: report whether the mod crashes, is unplayable, or is \
+                degraded, with a severity and a remedy per finding. Never writes."
+    )]
+    pub crashcheck: bool,
+
+    #[arg(long, help = "Print a timing breakdown of each phase after the run")]
+    pub timings: bool,
+
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Crash-check every mod in DIR, sharing one hash dictionary and game index                 across all of them and checking them in parallel. Never writes."
+    )]
+    pub batch: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "0",
+        help = "Worker threads for --batch. 0 picks one per core."
+    )]
+    pub jobs: usize,
 
     // Repath flags
     #[arg(
@@ -306,6 +332,12 @@ const ALL_FIX_IDS: &[&str] = &[
     "cac_pull",
     "entry_validator",
     "file_ref_migration",
+    // Detect-only. Selected alongside the repair rules because a crash check that has
+    // to be asked for separately is one nobody runs.
+    "replaced_bin_crash",
+    "dead_shader_link",
+    "dead_animation",
+    "dead_skin_mesh",
 ];
 
 /// Collect selected fix IDs based on CLI flags.

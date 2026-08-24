@@ -4,11 +4,29 @@
 use hematite_core::traits::{BinProvider, GameProvider};
 use hematite_live::GameIndex;
 use hematite_types::bin::BinTree;
-use std::sync::Mutex;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub struct LiveGameProvider {
     index: Mutex<GameIndex>,
     bin: Box<dyn BinProvider>,
+    /// Lazily built set of shader entry keys this install ships.
+    ///
+    /// Built at most once per provider: it means decompressing the shader WAD, and the
+    /// contents only change when the game patches. The inner `Option` keeps "could not
+    /// read" distinct from "no shaders", which callers must never conflate.
+    shader_defs: OnceLock<Option<Arc<HashSet<u32>>>>,
+    /// Parsed game BINs, keyed by path.
+    ///
+    /// Resolving a dead link walks up to 64 game BINs, and that walk repeats for every
+    /// BIN in the mod: on one fixture, 49 mod BINs against the same champion meant the
+    /// same handful of game files were decompressed and parsed hundreds of times. The
+    /// answer depends only on the install, which does not change while the provider
+    /// lives, so it is memoised here rather than by any individual caller.
+    ///
+    /// `None` is cached too: a path the game does not ship is just as worth remembering,
+    /// and re-asking costs a WAD lookup every time.
+    bin_cache: Mutex<std::collections::HashMap<String, Option<Arc<BinTree>>>>,
 }
 
 impl LiveGameProvider {
@@ -16,7 +34,68 @@ impl LiveGameProvider {
         Self {
             index: Mutex::new(index),
             bin,
+            shader_defs: OnceLock::new(),
+            bin_cache: Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Collect every shader definition's entry key from the install's shader WAD.
+    ///
+    /// A material's `shader` property links to one of these keys, so this is exactly the
+    /// set of links that resolve at load time. Derived from the installed game rather
+    /// than from a shipped list, because the valid set changes every patch: a stale list
+    /// invents crashes that do not exist, and an absent one silently disables the check.
+    fn build_shader_defs(&self) -> Option<Arc<HashSet<u32>>> {
+        let _t = hematite_core::timing::span("shader defs (build)");
+        let mut idx = self.index.lock().expect("poisoned");
+        let wad_path = idx
+            .game_dir()
+            .join("DATA")
+            .join("FINAL")
+            .join("Shaders")
+            .join("Shaders.wad.client");
+
+        if !wad_path.exists() {
+            tracing::warn!(
+                "shader validation unavailable: no shader WAD at {}",
+                wad_path.display()
+            );
+            return None;
+        }
+
+        let toc = match hematite_live::read_toc(&wad_path) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!("shader validation unavailable: {} ({e})", wad_path.display());
+                return None;
+            }
+        };
+        if let Err(e) = idx.add_wad(&wad_path) {
+            tracing::warn!("shader validation unavailable: {} ({e})", wad_path.display());
+            return None;
+        }
+
+        let mut out = HashSet::new();
+        for chunk in &toc.chunks {
+            let Some(bytes) = idx.pull_hash(chunk.path_hash) else {
+                continue;
+            };
+            // Only PROP BINs hold shader definitions. The WAD is mostly compiled shader
+            // blobs per graphics backend, and parsing those would be wasted work.
+            if bytes.len() < 4 || &bytes[0..4] != b"PROP" {
+                continue;
+            }
+            if let Ok(tree) = self.bin.parse_bytes(&bytes) {
+                out.extend(tree.objects.values().map(|o| o.path_hash.0));
+            }
+        }
+
+        if out.is_empty() {
+            tracing::warn!("shader validation unavailable: shader WAD yielded no definitions");
+            return None;
+        }
+        tracing::info!("shader validation: {} definitions read from the install", out.len());
+        Some(Arc::new(out))
     }
 
     /// Direct access for CLI-side machinery (deep repair, restore-anm,
@@ -33,15 +112,32 @@ impl GameProvider for LiveGameProvider {
     fn pull_raw(&self, path: &str) -> Option<Vec<u8>> {
         self.index.lock().expect("poisoned").pull_path(path)
     }
-    fn game_bin(&self, path: &str) -> Option<BinTree> {
-        let bytes = self.pull_raw(path)?;
-        match self.bin.parse_bytes(&bytes) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                tracing::debug!("game_bin parse failed for {}: {}", path, e);
-                None
+    fn game_bin(&self, path: &str) -> Option<Arc<BinTree>> {
+        if let Ok(cache) = self.bin_cache.lock() {
+            if let Some(hit) = cache.get(path) {
+                return hit.clone();
             }
         }
+
+        let parsed = self
+            .pull_raw(path)
+            .and_then(|bytes| match self.bin.parse_bytes(&bytes) {
+                Ok(tree) => Some(Arc::new(tree)),
+                Err(e) => {
+                    tracing::debug!("game_bin parse failed for {}: {}", path, e);
+                    None
+                }
+            });
+
+        if let Ok(mut cache) = self.bin_cache.lock() {
+            cache.insert(path.to_string(), parsed.clone());
+        }
+        parsed
+    }
+    fn shader_defs(&self) -> Option<Arc<HashSet<u32>>> {
+        self.shader_defs
+            .get_or_init(|| self.build_shader_defs())
+            .clone()
     }
 }
 

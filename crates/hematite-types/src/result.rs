@@ -17,6 +17,12 @@ pub struct ProcessResult {
     pub duration: Option<Duration>,
     /// Check-mode info (populated when --check is used).
     pub check_info: Option<CheckInfo>,
+    /// Player-facing findings: what is wrong, how badly, and what to do about it.
+    ///
+    /// Populated on every run, not only in check mode. A fix run already knows exactly
+    /// which defects it found, so discarding that would force a second pass to ask the
+    /// same question.
+    pub report: crate::diagnostic::CheckReport,
 }
 
 /// Information gathered in check mode (detection-only).
@@ -37,6 +43,7 @@ impl ProcessResult {
         self.files_removed += other.files_removed;
         self.errors.extend(other.errors);
         self.applied_fixes.extend(other.applied_fixes);
+        self.report.merge(other.report);
         // Merge check info (keep first non-None)
         if self.check_info.is_none() {
             self.check_info = other.check_info;

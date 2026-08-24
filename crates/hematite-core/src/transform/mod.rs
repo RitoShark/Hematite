@@ -123,6 +123,10 @@ pub fn apply_transform(
         ),
         TransformAction::ResolveDeadRefs { extensions } => resolve_refs::apply(ctx, extensions),
         TransformAction::RetypeStringToFile { targets } => retype_file::apply(ctx, targets),
+        // Detect-only rule: the defect is real but has no safe automatic repair, so zero
+        // changes is the correct outcome. The pipeline treats this action as
+        // reported-not-failed rather than as a fix that ran and did nothing.
+        TransformAction::ReportOnly => 0,
         TransformAction::SplitEntriesByType {
             entry_types,
             output_path_template,

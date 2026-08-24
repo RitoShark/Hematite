@@ -84,6 +84,31 @@ impl GameIndex {
         }
     }
 
+    /// Add the always-shared `UI` and `Global` WADs. Returns how many loaded.
+    ///
+    /// Interface and HUD BINs do not live in champion WADs, and a mod that replaces one
+    /// can ship it under any WAD name: a mod packaged as `Global.wad.client` can carry a
+    /// BIN the game keeps in `UI.wad.client`. An index primed only with champion WADs
+    /// therefore cannot see the vanilla copy, and such a mod reads as having no
+    /// counterpart when it plainly has one.
+    ///
+    /// Only TOCs are read, so this costs two header reads and decompresses nothing.
+    pub fn add_shared_wads(&mut self) -> usize {
+        let final_dir = self.game_dir.join("DATA").join("FINAL");
+        let mut loaded = 0;
+        for name in ["UI.wad.client", "Global.wad.client"] {
+            let path = final_dir.join(name);
+            if !path.exists() {
+                continue;
+            }
+            match self.add_wad(&path) {
+                Ok(()) => loaded += 1,
+                Err(e) => tracing::warn!("GameIndex: failed to load {}: {}", path.display(), e),
+            }
+        }
+        loaded
+    }
+
     pub fn has_hash(&self, h: u64) -> bool {
         self.by_hash.contains_key(&h)
     }

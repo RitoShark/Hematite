@@ -34,6 +34,12 @@ pub struct CharacterRelations {
     pub champion_to_subchamps: HashMap<String, Vec<String>>,
     /// subchamp (lowercase) → primary champion
     pub subchamp_to_champion: HashMap<String, String>,
+    /// Every playable champion (lowercase).
+    ///
+    /// Membership is what separates a champion from a summoned form: a trap, an egg or
+    /// a turret has its own character folder and its own skin BINs, so it is
+    /// structurally indistinguishable from a champion without this list.
+    pub champions: std::collections::HashSet<String>,
     /// entity name (lowercase) → healthbar value
     pub healthbar_values: HashMap<String, u8>,
     /// Global character blacklist (e.g., viegowraith)
@@ -59,6 +65,8 @@ impl CharacterRelations {
             }
         }
 
+        relations.champions = list.champions.iter().map(|c| c.to_lowercase()).collect();
+
         for (name, value) in &list.healthbar_values {
             relations
                 .healthbar_values
@@ -79,6 +87,11 @@ impl CharacterRelations {
     }
 
     /// Get related subchamps for a champion (case-insensitive).
+    /// Whether this character is a playable champion rather than a summoned form.
+    pub fn is_champion(&self, character: &str) -> bool {
+        self.champions.contains(&character.to_lowercase())
+    }
+
     pub fn get_subchamps(&self, champion: &str) -> Option<&[String]> {
         self.champion_to_subchamps
             .get(&champion.to_lowercase())

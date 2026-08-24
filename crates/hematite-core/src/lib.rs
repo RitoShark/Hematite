@@ -13,6 +13,7 @@
 //! - [`context`] — `FixContext` runtime state
 //! - [`pipeline`] — Fix orchestration: detect → transform → result
 //! - [`detect`] — Issue detection rules
+//! - [`check`] — Detect-only mode: the same rules, reported instead of applied
 //! - [`transform`] — Fix transform actions
 //!
 //! ### Shared utilities (LOC reduction)
@@ -23,16 +24,19 @@
 //! - [`fallback`] — Asset fallback with Jaro-Winkler similarity
 
 pub mod assets;
+pub mod check;
 pub mod context;
 pub mod detect;
 pub mod factory;
 pub mod fallback;
 pub mod filter;
 pub mod pipeline;
+pub mod reachability;
 pub mod repath;
 pub mod seeds;
 pub mod skinlite;
 pub mod strings;
+pub mod timing;
 pub mod traits;
 pub mod transform;
 pub mod wad_pipeline;

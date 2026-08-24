@@ -69,16 +69,16 @@ mod tests {
 
     struct MockHashes;
     impl crate::traits::HashProvider for MockHashes {
-        fn resolve_type(&self, _: TypeHash) -> Option<&str> {
+        fn resolve_type(&self, _: TypeHash) -> Option<String> {
             None
         }
-        fn resolve_field(&self, _: hematite_types::hash::FieldHash) -> Option<&str> {
+        fn resolve_field(&self, _: hematite_types::hash::FieldHash) -> Option<String> {
             None
         }
-        fn resolve_entry(&self, _: PathHash) -> Option<&str> {
+        fn resolve_entry(&self, _: PathHash) -> Option<String> {
             None
         }
-        fn resolve_game_path(&self, _: hematite_types::hash::GameHash) -> Option<&str> {
+        fn resolve_game_path(&self, _: hematite_types::hash::GameHash) -> Option<String> {
             None
         }
         fn type_hash(&self, _: &str) -> Option<TypeHash> {
@@ -159,6 +159,7 @@ mod tests {
             shader_validator: None,
             game: None,
             additional_bins: Vec::new(),
+            scope: Default::default(),
         };
 
         let merged_count = apply(&mut ctx);
