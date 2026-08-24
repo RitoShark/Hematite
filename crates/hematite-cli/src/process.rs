@@ -178,17 +178,43 @@ pub fn process_input(
         if is_wad_folder(input) {
             total_result = process_wad_folder(input, &ctx, &hash_provider)?;
         } else {
+            // Batch mode. One unreadable mod must not abandon the rest of the
+            // folder, so failures are collected and reported at the end.
             let mut it = WalkDir::new(input).into_iter();
             while let Some(entry) = it.next() {
                 let entry = entry.context("Failed to read directory entry")?;
-                let path = entry.path();
-                if is_wad_folder(path) {
-                    let result = process_wad_folder(path, &ctx, &hash_provider)?;
-                    total_result.merge(result);
+                let path = entry.path().to_path_buf();
+
+                // Never re-process our own output: a `.fixed.*` written
+                // earlier in this walk can be handed back by readdir, and
+                // fixing an already-fixed mod is the double-fix damage case.
+                if is_own_output(&path) {
+                    tracing::debug!("Skipping previously fixed output: {}", path.display());
+                    if path.is_dir() {
+                        it.skip_current_dir();
+                    }
+                    continue;
+                }
+
+                let outcome = if is_wad_folder(&path) {
                     it.skip_current_dir();
-                } else if path.is_file() && is_supported_file(path) {
-                    let result = process_file_with_hashes(path, &ctx, &hash_provider)?;
-                    total_result.merge(result);
+                    Some(process_wad_folder(&path, &ctx, &hash_provider))
+                } else if path.is_file() && is_supported_file(&path) {
+                    Some(process_file_with_hashes(&path, &ctx, &hash_provider))
+                } else {
+                    None
+                };
+
+                match outcome {
+                    Some(Ok(result)) => total_result.merge(result),
+                    Some(Err(e)) => {
+                        tracing::warn!("Failed to process {}: {e:#}", path.display());
+                        total_result.fixes_failed += 1;
+                        total_result
+                            .errors
+                            .push(format!("{}: {e:#}", path.display()));
+                    }
+                    None => {}
                 }
             }
         }
@@ -198,6 +224,15 @@ pub fn process_input(
 
     ctx.ui.finish();
     Ok(total_result)
+}
+
+/// Whether a path is one of Hematite's own `.fixed.*` outputs (file or WAD
+/// folder), which batch mode must never feed back into the pipeline.
+fn is_own_output(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_lowercase().contains(".fixed."))
+        .unwrap_or(false)
 }
 
 /// Check if a file is a supported type.

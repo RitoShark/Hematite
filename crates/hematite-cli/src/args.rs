@@ -118,6 +118,13 @@ pub struct Cli {
     #[arg(short, long, help = "Enable all fixes")]
     pub all: bool,
 
+    #[arg(
+        long,
+        help = "Don't wait for Enter before exiting (for scripted/batch runs). \
+                Implied by --json."
+    )]
+    pub no_pause: bool,
+
     // Output control
     #[arg(long, help = "JSON output for automation")]
     pub json: bool,

@@ -297,6 +297,7 @@ fn baseline_cli(input: PathBuf) -> Cli {
         json: false,
         dry_run: false,
         check: false,
+        no_pause: false,
         repath: false,
         no_repath: false,
         repath_prefix: None,
