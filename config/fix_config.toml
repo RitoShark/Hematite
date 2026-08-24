@@ -829,3 +829,25 @@ min_textures = 6
 threshold = 0.80
 # Interface art rather than skin art.
 excluded_segments = ["/hud/", "/icons2d/", "/icons/", "/spells/icons", "/loadouts/", "/summonericons"]
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PROPORTION CHECKS
+# ═════════════════════════════════════════════════════════════════════════════
+# Some defects are about share rather than any single file. A skin missing one particle
+# texture looks fine; a skin missing most of them is visibly broken.
+#
+# warn_at is EXCEEDED (>) and fail_at is REACHED (>=). The asymmetry is deliberate and both
+# were tuned against real mods: swapping either operator silently moves the line.
+#
+# min_total suppresses samples too small to mean anything, where one missing file is a
+# large percentage and no evidence.
+
+[[ratio_checks]]
+id          = "particle_refs"
+enabled     = true
+extensions  = [".dds", ".tex", ".sco", ".scb"]
+min_total   = 20
+warn_at     = 0.25
+fail_at     = 0.80
+warn_reason = "missing_particles"
+fail_reason = "missing_textures"

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use hematite_core::context::FixContext;
 use hematite_core::pipeline::apply_fixes;
 use hematite_core::repath as repath_core;
-use hematite_core::traits::{BinProvider, GameProvider, HashProvider};
+use hematite_core::traits::{BinProvider, GameProvider, HashProvider, WadProvider};
 use hematite_core::wad_pipeline::converters::ConverterRegistry;
 use hematite_file::{
     bin_adapter::FileBinProvider, hash_adapter::TxtHashProvider,
@@ -524,6 +524,10 @@ fn process_wad_file(
     if let Some(live) = live {
         live.with_index(|idx| {
             idx.add_shared_wads();
+            // Map scenery and the minion/turret/structure art live in map WADs, named
+            // after the map rather than any character, so character-name priming never
+            // reaches them.
+            idx.add_map_wads();
         });
 
         let characters: std::collections::BTreeSet<String> = all_files
@@ -618,6 +622,28 @@ fn process_wad_file(
     };
 
     let mut loose_texture_verdict = None;
+
+
+    // Proportion checks: what share of the art a mod references actually resolves. Runs
+    // here, before the WAD pipeline converts anything, for the same reason the
+    // loose-texture measurement does: afterwards the archive no longer reflects what the
+    // mod shipped.
+    let mut ratio_findings: Vec<hematite_types::diagnostic::Diagnostic> = Vec::new();
+    if !config.ratio_checks.is_empty() {
+        let _t = hematite_core::timing::span("ratio checks");
+        let references: Vec<String> = early_parsed
+            .values()
+            .flat_map(hematite_core::walk::string_refs)
+            .map(str::to_string)
+            .collect();
+        let game_ref = live.map(|l| l as &dyn GameProvider);
+        ratio_findings = hematite_core::check::asset_ratio::run_all(
+            &config.ratio_checks,
+            &config.reasons,
+            &references,
+            |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
+        );
+    }
 
     // Loose textures the game will never load.
     //
@@ -714,6 +740,14 @@ fn process_wad_file(
 
     // Emit the loose-texture verdict now that the report exists. Measured earlier,
     // before the WAD pipeline converts `.dds` to `.tex` in the working set.
+
+    for finding in &ratio_findings {
+        total_result.report.push(finding.clone());
+    }
+    if !ratio_findings.is_empty() {
+        total_result.report.attach_catalog(&config.reasons);
+    }
+
     if let Some(verdict) = &loose_texture_verdict {
         total_result.report.push(
             hematite_types::diagnostic::Diagnostic::new(

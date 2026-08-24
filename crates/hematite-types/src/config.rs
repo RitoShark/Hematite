@@ -38,6 +38,38 @@ pub struct FixConfig {
     /// Settings for the whole-archive loose-texture measurement.
     #[serde(default)]
     pub loose_textures: LooseTextureConfig,
+    /// Proportion checks: how much of what a mod references actually resolves.
+    #[serde(default)]
+    pub ratio_checks: Vec<RatioCheckConfig>,
+}
+
+/// One proportion check.
+///
+/// Some defects are about share rather than any single file: a skin missing one particle
+/// texture looks fine, a skin missing most of them is visibly broken. Not a `FixRule`,
+/// because the question spans the whole archive rather than one BIN.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RatioCheckConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Identifier used as the diagnostic's rule id.
+    pub id: String,
+    /// Extensions counted, including the dot.
+    pub extensions: Vec<String>,
+    /// Below this many distinct references the sample says nothing: one missing file out
+    /// of a handful is a large percentage and no evidence.
+    pub min_total: usize,
+    /// Share that must be EXCEEDED to warn. Exclusive.
+    pub warn_at: f32,
+    /// Share that must be REACHED to fail. Inclusive. The asymmetry with `warn_at` is
+    /// deliberate; both were tuned against real mods.
+    pub fail_at: f32,
+    /// Reason reported between `warn_at` and `fail_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warn_reason: Option<String>,
+    /// Reason reported at or above `fail_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_reason: Option<String>,
 }
 
 /// Settings for the loose-texture measurement.

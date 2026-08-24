@@ -109,6 +109,42 @@ impl GameIndex {
         loaded
     }
 
+    /// Add every shipped map WAD. Returns how many loaded.
+    ///
+    /// Map geometry, scenery and the minion/turret/structure art all live under
+    /// `Maps/Shipping`, in WADs named after the map rather than after any character. An
+    /// index primed only from character names cannot see any of it, so a map mod's
+    /// references all read as missing: on one fixture that was 87% of everything it named.
+    ///
+    /// Locale variants are skipped. They duplicate the base WAD's assets under the same
+    /// hashes and only add TOC-reading work.
+    ///
+    /// Only TOCs are read, so this costs a header read per file and decompresses nothing.
+    pub fn add_map_wads(&mut self) -> usize {
+        let shipping = self.game_dir.join("DATA").join("FINAL").join("Maps").join("Shipping");
+        let Ok(entries) = std::fs::read_dir(&shipping) else {
+            return 0;
+        };
+
+        let mut loaded = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_lowercase();
+            if !name.ends_with(".wad.client") || name.contains(".en_") {
+                continue;
+            }
+            match self.add_wad(&path) {
+                Ok(()) => loaded += 1,
+                Err(e) => tracing::debug!("GameIndex: skipped {}: {}", path.display(), e),
+            }
+        }
+        loaded
+    }
+
     pub fn has_hash(&self, h: u64) -> bool {
         self.by_hash.contains_key(&h)
     }

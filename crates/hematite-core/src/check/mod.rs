@@ -18,6 +18,7 @@
 //! finds *which* property is unmigrated and each target may name its own reason. That is
 //! what lets one rule report a crash for an animation path and a warning for an icon.
 
+pub mod asset_ratio;
 pub mod loose_textures;
 
 use crate::context::FixContext;
