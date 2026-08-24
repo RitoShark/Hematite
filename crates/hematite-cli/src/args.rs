@@ -461,7 +461,17 @@ mod tests {
 
         let config = load_repo_config();
 
-        assert_eq!(config.version, "2.3.4");
+        // Not pinned to a literal. This test exists to catch schema drift, and a hardcoded
+        // version fails on every legitimate bump while saying nothing about shape. What
+        // matters is that there IS a version the staleness gate can compare.
+        assert!(
+            config
+                .version
+                .split('.')
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())),
+            "config version {:?} is not dotted-numeric, so the staleness gate cannot compare it",
+            config.version
+        );
 
         // The central enable list is the single authority — spot-check both
         // directions plus a WAD-level entry.
