@@ -169,6 +169,22 @@ mod tests {
         }
     }
 
+    /// The case that is now almost every mod: already on the modern schema.
+    ///
+    /// `textureName` holds the sampler's name and `texturePath` holds the path. Neither
+    /// rename has anything to do, and running them must leave the sampler exactly as it is.
+    /// Blind renaming moved the name into `texturePath` and overwrote the real path, so a
+    /// mod that was correct came out broken.
+    #[test]
+    fn an_already_modern_sampler_is_left_alone() {
+        let name = PropertyValue::String("Diffuse_Texture".into());
+        let path = PropertyValue::String("ASSETS/Characters/Jhin/x.dds".into());
+
+        // The path moves; the name does not.
+        assert!(is_asset_path(&path));
+        assert!(!is_asset_path(&name));
+    }
+
     #[test]
     fn a_non_string_value_is_not_a_path() {
         assert!(!is_asset_path(&PropertyValue::U32(1)));

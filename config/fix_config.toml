@@ -65,21 +65,16 @@ targets = [
     { class = "StaticMaterialShaderSamplerDef", field = "texturePath" },
 ]
 
+# REPORT ONLY, deliberately, until the patch that needs it ships.
+#
+# Retyping a path from a string to a hash is only correct once the client reads the hashed
+# form. It does not yet. Applying it early breaks working mods: a loading screen retyped
+# ahead of the patch stops resolving, which is exactly what happened to anakin viego.
+#
+# The detection above stays on, because knowing a mod will break next patch is the whole
+# point. Flip this back to `retype_string_to_file` on the day the patch lands.
 [fixes.file_ref_migration.apply]
-type = "retype_string_to_file"
-targets = [
-    # CRASH: the engine reads animation paths through a code path that cannot fall back
-    # to the string form, so an unmigrated one is fatal rather than merely unresolved.
-    { class = "AnimationResourceData", field = "mAnimationFilePath", reason = "unmigrated_animation_path" },
-    # WARNING: interface and loading-screen art. Fails to resolve, renders missing.
-    { class = "SkinCharacterDataProperties", field = "iconCircle", reason = "unmigrated_hud_asset" },
-    { class = "SkinCharacterDataProperties", field = "iconSquare", reason = "unmigrated_hud_asset" },
-    { class = "CensoredImage", field = "image", reason = "unmigrated_hud_asset" },
-    # WARNING: in-world art. Inherits the rule's `unmigrated_asset`.
-    { class = "SkinMeshDataProperties", field = "texture" },
-    { class = "SkinMeshDataProperties_MaterialOverride", field = "texture" },
-    { class = "StaticMaterialShaderSamplerDef", field = "texturePath" },
-]
+type = "report_only"
 
 [fixes.merge_linked_bins]
 name = "Merge Linked BINs"

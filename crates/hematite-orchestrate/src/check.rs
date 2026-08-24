@@ -37,6 +37,8 @@ pub struct ModChecker {
     hashes: Arc<dyn HashProvider>,
     live: Option<LiveGameProvider>,
     enabled_fixes: Vec<String>,
+    /// Whether a repair also fetches missing assets out of the installed game.
+    pull_missing: bool,
 }
 
 impl ModChecker {
@@ -75,6 +77,7 @@ impl ModChecker {
             hashes,
             live,
             enabled_fixes,
+            pull_missing: false,
         })
     }
 
@@ -123,6 +126,16 @@ fn enabled_fixes_in_order(config: &FixConfig) -> Vec<String> {
 }
 
 impl ModChecker {
+    /// Also fetch missing assets from the installed game when repairing.
+    ///
+    /// Fixes what nothing else can (a missing animation, mesh or cubemap only exists in the
+    /// game files) and costs the most: the closure walk and the chunk reads run to most of
+    /// a minute on a large mod. Off unless asked for.
+    pub fn repair_pulling(mut self, pull: bool) -> Self {
+        self.pull_missing = pull;
+        self
+    }
+
     /// The reason catalog behind the findings, for rendering them.
     pub fn reasons(&self) -> &hematite_types::diagnostic::ReasonCatalog {
         &self.config.reasons
@@ -318,9 +331,10 @@ impl ModChecker {
             relocate_combo_bins: false,
             game_wad: None,
             live: self.live.as_ref(),
-            // The point of a repair: a missing animation or mesh is fixed by fetching it,
-            // and the engine is looking at the installed game anyway.
-            pull_missing: true,
+            // Off by default. Walking the whole dependency closure and fetching every
+            // missing file out of the game costs most of a minute on a large mod, and the
+            // caller usually has its own asset pull already. `repair_pulling` opts in.
+            pull_missing: self.pull_missing,
             in_place: true,
         };
         let result = crate::fix_folder(
