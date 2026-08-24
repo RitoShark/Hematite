@@ -2,26 +2,76 @@
 
 ---
 
-## STATUS (phases 1-3 landed)
+## STATUS: Celestial now runs on this engine
 
-`--crashcheck` works end to end, human-readable and `--json`. Workspace compiles, 178
-tests pass.
+The launcher no longer carries its own crash check. It depends on
+`hematite-orchestrate`, calls `ModChecker`, and renders the reason catalog this repo
+ships. What follows is what changed and how it was verified; the design record for each
+phase is below.
 
-**Built**
-- `hematite-types::diagnostic` — `Severity`, `ReasonDef`, `ReasonCatalog`, `Diagnostic`,
-  `CheckReport`, `SkipReason`
-- Reason catalog as **data** in `fix_config.toml` under `[reasons.*]`, 30 entries. Not a
-  Rust enum: adding a crash class or changing a severity is a config edit.
-- `reason` on `FixRule`, `WadFixRule`, and `ClassFieldTarget` (all optional, so existing
-  configs load unchanged)
-- `retype_file::detect_hits` / `target_key` — per-property migration detection
-- `check::diagnose_fired_rule`, wired into `pipeline` and `wad_pipeline`, so every
-  existing path produces diagnostics rather than a parallel check-only code path
-- `hematite-cli --crashcheck`
+### What the migration was for
 
-**Per-target severity works.** One migration rule reports `crash` on
-`AnimationResourceData.mAnimationFilePath` and `warning` on icon fields, because each
-target names its own reason and each reason carries its own severity.
+Before: six of the seven crash-checklist mods imported into Celestial as SAFE. After, on
+the same seven, with the same repairs applied first:
+
+| Mod | Was | Now |
+|---|---|---|
+| Alucard Jhin | SAFE | CRASH `UnmigratedAnimationPath` + 4 warnings |
+| Klee Gragas | SAFE | CRASH `UnmigratedAnimationPath` + `OutdatedMeshFormat` |
+| anakin viego | SAFE | CRASH `UnmigratedAnimationPath`, UNPLAYABLE `NoAbilityVfx` |
+| Spirit Blossom Rift | SAFE | CRASH `UnmigratedAnimationPath` + 5 warnings |
+| Emerald Gains | SAFE | CRASH `ReplacedBinCrash` |
+| Motorbike Gragas | SAFE | WARN, 3 classes |
+| project-yuumi | CRASH `OutdatedMaterial` | same, plus 5 warnings |
+
+The string-to-file migration crash lands on five of them. That is the patch Riot ships
+this week: an unmigrated animation path is fatal, and the launcher would have imported
+all five as fine.
+
+Nothing Celestial caught is lost. Its one finding across the corpus, `OutdatedMaterial`
+on project-yuumi, is matched exactly.
+
+### Faults the migration exposed
+
+Each of these silently disabled something, and each was found by making a thing that had
+been implicit explicit:
+
+- **The whole check was failing, silently.** Sharing the hash database meant two
+  `EnvOpenOptions` for one path, which LMDB refuses. The error went into a
+  `tracing::warn` nobody reads. There is one `open_env` now, and `try_check` returns the
+  reason instead of swallowing it.
+- **A remote config with no reason catalog was accepted.** It cannot describe a single
+  finding, so every check came back blank while looking healthy. The version gate could
+  not see it because the version string was the same.
+- **Seven reasons had no variant in the launcher**, so their findings carried text and no
+  severity: the tooltip said something was wrong and the badge said the mod was fine.
+- **`emotesCrash` was never in the frontend union**, for as long as it has existed.
+- **`stale_character_record` was enabled in config and never ran**: the CLI's hand-written
+  `ALL_FIX_IDS` had drifted two entries behind.
+- **The fold ran after four early returns**, so most mods never reached it.
+
+Every one of those is now a failing test rather than a comment.
+
+### Verified
+
+- All seven fixtures give **identical findings packed and extracted** to a raw folder,
+  which is what the provider abstraction was for.
+- `ModChecker`'s findings match the CLI's, finding for finding, on all seven.
+- One checker reused across mods gives each the same answer a fresh checker gives it.
+- Both engines run over the **same repaired mod**, not the untouched download. Comparing
+  otherwise is meaningless: Celestial repairs on import.
+
+### Not done
+
+**Phase D, deleting Deep Repair and Quick Repair, has not been started.** The check side
+is what protects users from this week's patch and it is finished. The repair side is a
+refactor with no user-visible gain if it goes wrong, it cannot be verified without
+driving Creator Hub by hand, and it deletes ten thousand lines. See the phase notes below
+for the capability inventory it needs first.
+
+---
+
+## Historical record
 
 ### Fixture results
 
