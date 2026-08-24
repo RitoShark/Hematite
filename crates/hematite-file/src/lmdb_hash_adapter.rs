@@ -184,7 +184,19 @@ impl LmdbHashProvider {
 // LMDB plumbing
 // ---------------------------------------------------------------------------
 
-fn open_env(lmdb_dir: &Path) -> Result<Env> {
+/// Open the shared hash database.
+///
+/// The single definition of how this database is opened, and it has to stay that way.
+/// LMDB refuses to open one path twice in a process with different options, so a second
+/// definition anywhere (another crate, another app in the same process) does not merely
+/// duplicate this one, it makes whichever opens second fail outright with "an environment
+/// is already opened with different options". That is exactly what happened when Celestial
+/// moved onto the shared path with its own `map_size` and `max_dbs`.
+///
+/// Public for that reason: anything in-process that needs this database calls this rather
+/// than writing its own options. Opening twice through here is fine, heed hands back the
+/// same environment.
+pub fn open_env(lmdb_dir: &Path) -> Result<Env> {
     // map_size must be page-aligned AND large enough for the data
     // file. We snap to the actual data.mdb size + 25% headroom, with
     // a 100 MB floor.
