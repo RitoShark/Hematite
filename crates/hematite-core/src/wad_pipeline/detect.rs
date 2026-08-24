@@ -89,6 +89,30 @@ fn check_binary_header(bytes: &[u8], check: &BinaryHeaderCheck) -> Result<bool> 
             allowed_versions,
         } => check_version_at_offset(bytes, *offset, *size, endian, allowed_versions),
         BinaryHeaderCheck::MagicSignature { signature } => Ok(bytes.starts_with(signature)),
+
+        BinaryHeaderCheck::BlockAlignment {
+            magic,
+            width_offset,
+            height_offset,
+            format_offset,
+            block_formats,
+            block_size,
+        } => {
+            let needed = (*format_offset).max(*width_offset + 1).max(*height_offset + 1) + 1;
+            if bytes.len() < needed || !bytes.starts_with(magic) {
+                return Ok(false);
+            }
+            let format = bytes[*format_offset];
+            if !block_formats.contains(&format) {
+                // Not block-compressed, so any size is valid.
+                return Ok(false);
+            }
+            let read_u16 = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]) as u32;
+            let width = read_u16(*width_offset);
+            let height = read_u16(*height_offset);
+            let block = (*block_size).max(1);
+            Ok(width % block != 0 || height % block != 0)
+        }
     }
 }
 
@@ -129,6 +153,59 @@ fn check_version_at_offset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// A TEX header: magic, u16 width, u16 height, a spare byte, then the format byte.
+    fn tex_header(width: u16, height: u16, format: u8) -> Vec<u8> {
+        let mut b = vec![0u8; 12];
+        b[0..4].copy_from_slice(b"TEX\0");
+        b[4..6].copy_from_slice(&width.to_le_bytes());
+        b[6..8].copy_from_slice(&height.to_le_bytes());
+        b[9] = format;
+        b
+    }
+
+    fn alignment_check() -> BinaryHeaderCheck {
+        BinaryHeaderCheck::BlockAlignment {
+            magic: b"TEX\0".to_vec(),
+            width_offset: 4,
+            height_offset: 6,
+            format_offset: 9,
+            block_formats: vec![10, 12],
+            block_size: 4,
+        }
+    }
+
+    #[test]
+    fn misaligned_block_compressed_texture_is_flagged() {
+        let check = alignment_check();
+        assert!(check_binary_header(&tex_header(120, 121, 12), &check).unwrap());
+        assert!(check_binary_header(&tex_header(63, 64, 10), &check).unwrap());
+    }
+
+    /// The regression this check exists for: the rule used to match every `.tex` and let
+    /// the transform decide, so a perfectly valid 120x120 BC3 texture was reported as a
+    /// crash.
+    #[test]
+    fn an_aligned_texture_is_not_flagged() {
+        let check = alignment_check();
+        assert!(!check_binary_header(&tex_header(120, 120, 12), &check).unwrap());
+        assert!(!check_binary_header(&tex_header(24, 24, 12), &check).unwrap());
+    }
+
+    /// Only block-compressed formats have to be a whole number of blocks across.
+    #[test]
+    fn an_uncompressed_texture_of_any_size_is_fine() {
+        let check = alignment_check();
+        assert!(!check_binary_header(&tex_header(121, 123, 20), &check).unwrap());
+    }
+
+    #[test]
+    fn a_non_texture_or_truncated_file_is_not_flagged() {
+        let check = alignment_check();
+        assert!(!check_binary_header(b"NOTATEX-----", &check).unwrap());
+        assert!(!check_binary_header(b"TEX", &check).unwrap());
+    }
 
     #[test]
     fn test_check_extension() {

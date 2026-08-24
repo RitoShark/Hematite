@@ -689,6 +689,17 @@ pub struct WadFixRule {
     /// the *only* thing standing between the player and a crash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Path fragments that route a file to [`WadFixRule::alternate_reason`].
+    ///
+    /// The same malformed file means different things depending on what it is. A
+    /// block-misaligned texture on a champion faults on load; the identical fault on a
+    /// summoner emote only faults when the emote is triggered, which is a different
+    /// severity and a different sentence to show the player.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternate_path_markers: Vec<String>,
+    /// Reason used for files matching `alternate_path_markers`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternate_reason: Option<String>,
     pub detect: WadDetectionRule,
     pub apply: WadTransformAction,
 }
@@ -749,6 +760,35 @@ pub enum BinaryHeaderCheck {
         /// Expected bytes at start of file
         signature: Vec<u8>,
     },
+
+    /// A block-compressed texture whose dimensions are not a multiple of the block size.
+    ///
+    /// Block compression stores fixed-size blocks of pixels, so a texture that is not a
+    /// whole number of blocks across has no valid encoding. The engine sizes the payload
+    /// from the dimensions and faults on upload.
+    ///
+    /// Only block-compressed formats are affected; an uncompressed texture of any size is
+    /// fine, which is why the format byte gates the check.
+    #[serde(rename = "block_alignment")]
+    BlockAlignment {
+        /// Expected bytes at the start of the file.
+        magic: Vec<u8>,
+        /// Offset of the `u16` little-endian width.
+        width_offset: usize,
+        /// Offset of the `u16` little-endian height.
+        height_offset: usize,
+        /// Offset of the format byte.
+        format_offset: usize,
+        /// Format values that are block-compressed. Anything else is not checked.
+        block_formats: Vec<u8>,
+        /// Block size in pixels.
+        #[serde(default = "default_block_size")]
+        block_size: u32,
+    },
+}
+
+fn default_block_size() -> u32 {
+    4
 }
 
 fn default_endian() -> Endian {

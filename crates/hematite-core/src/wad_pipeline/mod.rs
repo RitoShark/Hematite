@@ -73,21 +73,12 @@ pub fn apply_wad_fixes(
 
         let mut result = apply_single_fix(files, fix_rule, fix_id, hash_provider, referenced)?;
 
-        // Report before merging, while this rule's own affected-file counts are still
-        // separable from every other rule's.
-        if let Some(reason) = fix_rule.reason.as_deref() {
-            for applied in &result.applied_fixes {
-                if applied.files_affected == 0 {
-                    continue;
-                }
-                let mut diagnostic =
-                    hematite_types::diagnostic::Diagnostic::new(&config.reasons, reason, fix_id);
-                if applied.files_affected > 1 {
-                    diagnostic =
-                        diagnostic.with_detail(format!("{} files", applied.files_affected));
-                }
-                result.diagnostics.push(diagnostic);
-            }
+        // Report before merging, while this rule's own affected files are still separable
+        // from every other rule's.
+        if fix_rule.reason.is_some() {
+            result
+                .diagnostics
+                .extend(diagnose_wad_fix(fix_rule, fix_id, &result, config));
         }
 
         output.merge(result);
@@ -157,6 +148,81 @@ impl WadFixOutput {
         self.applied_fixes.extend(other.applied_fixes);
         self.diagnostics.extend(other.diagnostics);
     }
+}
+
+
+/// Diagnostics for one WAD rule that affected files.
+///
+/// Splits the affected paths by [`WadFixRule::alternate_path_markers`] before summarising,
+/// because the same malformed file can mean different things in different places: a
+/// misaligned texture on a champion faults on load, the identical fault on an emote faults
+/// only when the emote is used.
+fn diagnose_wad_fix(
+    fix_rule: &WadFixRule,
+    fix_id: &str,
+    result: &WadFixOutput,
+    config: &FixConfig,
+) -> Vec<hematite_types::diagnostic::Diagnostic> {
+    // Every path this rule touched, whichever action it used.
+    let mut paths: Vec<&str> = Vec::new();
+    paths.extend(result.files_to_remove.iter().map(String::as_str));
+    paths.extend(result.files_to_convert.iter().map(|c| c.path.as_str()));
+    paths.extend(result.files_to_transform.iter().map(|t| t.path.as_str()));
+    paths.extend(result.files_to_rename.iter().map(|(from, _)| from.as_str()));
+
+    // Some actions report only a count, so fall back to that rather than reporting nothing.
+    if paths.is_empty() {
+        let affected: u32 = result.applied_fixes.iter().map(|a| a.files_affected).sum();
+        if affected == 0 {
+            return Vec::new();
+        }
+        let Some(reason) = fix_rule.reason.as_deref() else {
+            return Vec::new();
+        };
+        let mut d = hematite_types::diagnostic::Diagnostic::new(&config.reasons, reason, fix_id);
+        if affected > 1 {
+            d = d.with_detail(format!("{affected} files"));
+        }
+        return vec![d];
+    }
+
+    let markers: Vec<String> = fix_rule
+        .alternate_path_markers
+        .iter()
+        .map(|m| m.to_lowercase())
+        .collect();
+    let (alternate, primary): (Vec<&str>, Vec<&str>) = if markers.is_empty() {
+        (Vec::new(), paths)
+    } else {
+        paths.into_iter().partition(|p| {
+            let lower = p.to_lowercase();
+            markers.iter().any(|m| lower.contains(m.as_str()))
+        })
+    };
+
+    let summarise = |group: &[&str]| {
+        if group.len() == 1 {
+            group[0].to_string()
+        } else {
+            format!("{} files, including {}", group.len(), group[0])
+        }
+    };
+
+    let mut out = Vec::new();
+    for (group, reason) in [
+        (primary, fix_rule.reason.as_deref()),
+        (alternate, fix_rule.alternate_reason.as_deref().or(fix_rule.reason.as_deref())),
+    ] {
+        if group.is_empty() {
+            continue;
+        }
+        let Some(reason) = reason else { continue };
+        out.push(
+            hematite_types::diagnostic::Diagnostic::new(&config.reasons, reason, fix_id)
+                .with_detail(summarise(&group)),
+        );
+    }
+    out
 }
 
 fn apply_single_fix(
@@ -323,6 +389,8 @@ mod tests {
             enabled: true,
             severity: "low".to_string(),
             reason: None,
+            alternate_path_markers: Vec::new(),
+            alternate_reason: None,
             detect: WadDetectionRule::FileExtension {
                 extension: ".anm".to_string(),
                 binary_check: None,
