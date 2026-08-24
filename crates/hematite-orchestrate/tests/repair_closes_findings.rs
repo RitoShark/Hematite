@@ -173,9 +173,10 @@ fn report_one_fixture_before_and_after() {
         println!("── {label}");
         for d in &report.diagnostics {
             println!(
-                "   {:?} {} {}",
+                "   {:?} {} [in {}] {}",
                 d.severity,
                 d.reason,
+                d.entry.as_deref().unwrap_or("?"),
                 d.detail.as_deref().unwrap_or("")
             );
         }

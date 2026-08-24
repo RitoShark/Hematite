@@ -87,7 +87,7 @@ pub fn skip_reason(rule: &FixRule, ctx: &FixContext) -> Option<SkipReason> {
 /// unchecked for these rules, which self-heals on the next config refresh. The
 /// alternative fails the other way and reports a defect on every unlisted form, which is
 /// the bug this gate exists to remove.
-fn is_subcharacter(ctx: &FixContext) -> bool {
+pub(crate) fn is_subcharacter(ctx: &FixContext) -> bool {
     is_summoned_form(&ctx.tree.linked, &ctx.file_path, ctx.champions)
 }
 

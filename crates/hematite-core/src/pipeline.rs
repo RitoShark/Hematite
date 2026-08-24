@@ -64,6 +64,20 @@ pub fn apply_fixes_in_phase(
             continue;
         }
 
+        // A property that exists only on the playable champion must not be WRITTEN onto its
+        // summoned forms either. This gate was on the reporting path alone, so a trap or an
+        // egg was quietly given a champion's health-bar style and then not even mentioned:
+        // the fix applied, the finding did not. Detecting and repairing have to agree about
+        // what a rule is allowed to touch, or the disagreement is invisible by construction.
+        if fix_rule.main_character_only && crate::check::is_subcharacter(ctx) {
+            tracing::debug!(
+                "Skipping '{}' on {}: a summoned form, not the champion",
+                fix_id,
+                ctx.file_path
+            );
+            continue;
+        }
+
         // Without a game install, dead-link detection can't consult the game
         // closure — every game-defined entry looks "dead" and the pull can
         // never apply. Skip instead of reporting false errors.
@@ -173,5 +187,38 @@ fn extract_entry_type(rule: &DetectionRule) -> Option<&str> {
         | DetectionRule::DeadShaderLink
         | DetectionRule::DeadAssetReference { .. }
         | DetectionRule::StaleCharacterRecord { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod main_character_gate_tests {
+    //! Detecting and repairing must agree about what a rule may touch.
+    //!
+    //! `main_character_only` gated the report and not the write, so a summoned form was
+    //! given a champion's health-bar style and then not listed as having been changed. A
+    //! fix that applies where it does not report is invisible twice over: the mod is
+    //! modified and nothing says so.
+
+    use hematite_types::champion::{CharacterRelations, ChampionList};
+
+    #[test]
+    fn a_summoned_form_is_not_the_champion() {
+        let list = ChampionList {
+            version: "test".into(),
+            champions: vec!["jhin".into()],
+            subchamps: [("jhin".to_string(), vec!["jhintrap".to_string()])]
+                .into_iter()
+                .collect(),
+            healthbar_values: Default::default(),
+            blacklist: Vec::new(),
+            special_blacklists: Default::default(),
+        };
+        let champions = CharacterRelations::from_champion_list(&list);
+
+        assert!(champions.is_champion("jhin"));
+        assert!(
+            !champions.is_champion("jhintrap"),
+            "a trap is not a playable champion, which is what the gate turns on"
+        );
     }
 }

@@ -48,17 +48,7 @@ impl ModChecker {
         let config = crate::remote::load_fix_config();
         let champions =
             CharacterRelations::from_champion_list(&crate::remote::load_champion_list());
-        // Every rule the config turns on, which `is_fix_enabled` documents as the single
-        // authority. Deriving it beats carrying a second hand-written list: the CLI's copy
-        // had drifted two entries behind, so `stale_character_record` was enabled in config
-        // and never actually ran.
-        let enabled_fixes: Vec<String> = config
-            .fixes
-            .keys()
-            .chain(config.wad_fixes.keys())
-            .filter(|id| config.is_fix_enabled(id))
-            .cloned()
-            .collect();
+        let enabled_fixes = enabled_fixes_in_order(&config);
 
         let hashes: Arc<dyn HashProvider> =
             Arc::new(hematite_file::lmdb_hash_adapter::LmdbHashProvider::load_from_appdata().context(
@@ -88,6 +78,51 @@ impl ModChecker {
         })
     }
 
+}
+
+/// Every enabled rule, in the order the config declares them.
+///
+/// ## The order is load-bearing
+/// The pipeline applies fixes in the order of the list it is handed, and some pairs only
+/// work one way round. `staticmat_texturepath` moves a path out of `TextureName` into
+/// `TexturePath`; `staticmat_samplername` then moves the sampler's name into the
+/// `TextureName` it just vacated. Run the other way round, the sampler name lands in
+/// `TextureName` first and the next rule promotes THAT into `TexturePath`, so the material
+/// ends up pointing at "Diffuse_Texture" instead of at a texture. The real path is gone.
+///
+/// This used to be derived from `config.fixes.keys()`, which is a `HashMap`: arbitrary
+/// order, randomised per process, so the pair ran the wrong way round some of the time and
+/// silently destroyed materials when it did. `enabled_fixes` is a list precisely so the
+/// author can say what runs when.
+///
+/// Rules enabled individually but absent from that list are appended, sorted, so a config
+/// that never grew an `enabled_fixes` entry still runs them and still runs them the same
+/// way twice.
+fn enabled_fixes_in_order(config: &FixConfig) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    if let Some(declared) = &config.enabled_fixes {
+        for id in declared {
+            if seen.insert(id.as_str()) {
+                out.push(id.clone());
+            }
+        }
+    }
+
+    let mut extra: Vec<String> = config
+        .fixes
+        .keys()
+        .chain(config.wad_fixes.keys())
+        .filter(|id| !seen.contains(id.as_str()) && config.is_fix_enabled(id))
+        .cloned()
+        .collect();
+    extra.sort();
+    out.extend(extra);
+    out
+}
+
+impl ModChecker {
     /// The reason catalog behind the findings, for rendering them.
     pub fn reasons(&self) -> &hematite_types::diagnostic::ReasonCatalog {
         &self.config.reasons
@@ -459,6 +494,36 @@ mod tests {
         }
     }
 
+    /// The pair that made this matter, and the reason it is a regression test rather than a
+    /// comment: run the wrong way round, a material ends up with its sampler's NAME sitting
+    /// in `texturePath` and the real texture path gone.
+    #[test]
+    fn the_material_rules_keep_their_declared_order() {
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/fix_config.toml"
+        ))
+        .expect("the repo config must be readable");
+        let config: FixConfig = toml::from_str(&raw).expect("the repo config must parse");
+
+        let order = enabled_fixes_in_order(&config);
+        let at = |id: &str| order.iter().position(|x| x == id);
+        let (path_rule, sampler_rule) = (
+            at("staticmat_texturepath").expect("staticmat_texturepath is enabled"),
+            at("staticmat_samplername").expect("staticmat_samplername is enabled"),
+        );
+        assert!(
+            path_rule < sampler_rule,
+            "texturePath must be vacated before the sampler name moves in; got {order:?}"
+        );
+
+        let mut unique = order.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), order.len(), "a rule must not run twice: {order:?}");
+    }
+
+    /// The list is what the config declares, in that order, every time.
     #[test]
     fn a_folder_of_archives_yields_each_one() {
         let dir = tempfile::tempdir().unwrap();
