@@ -24,7 +24,7 @@ mod hash_downloader;
 mod interactive;
 mod logging;
 mod process;
-mod remote;
+use hematite_orchestrate::remote;
 mod ui;
 mod version_check;
 

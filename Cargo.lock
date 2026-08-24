@@ -930,11 +930,13 @@ name = "hematite-orchestrate"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "const_format",
  "hematite-core",
  "hematite-file",
  "hematite-live",
  "hematite-types",
  "indexmap",
+ "reqwest",
  "serde_json",
  "tempfile",
  "toml 0.8.23",

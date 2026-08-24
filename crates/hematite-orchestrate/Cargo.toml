@@ -11,8 +11,15 @@ hematite-core = { workspace = true }
 hematite-file = { workspace = true }
 hematite-live = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 tracing = "0.1"
 walkdir = "2"
+# Config fetching. `remote` lives here rather than in the CLI so every consumer
+# (the CLI, Celestial) reads the same fix_config.toml through the same cache,
+# instead of each forking its own copy of the fetch-and-fall-back logic.
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+const_format = "0.2"
+toml = "0.8"
 
 [dev-dependencies]
 serde_json = { workspace = true }
