@@ -191,6 +191,56 @@ fn collect_strings<'a>(value: &'a PropertyValue, out: &mut Vec<&'a str>) {
     }
 }
 
+/// Every string value paired with the field hash it is stored under.
+///
+/// Only a string that is a property's own value is paired. A string sitting loose inside a
+/// container has no field of its own: it inherits the container's, which would make an
+/// arbitrary list of paths look like repeated instances of that one field. Nested
+/// properties, including ones several container levels down inside map placeables, do get
+/// their own hash and are reported.
+pub fn string_fields(tree: &BinTree) -> Vec<(u32, &str)> {
+    let mut out = Vec::new();
+    for obj in tree.objects.values() {
+        for (field_hash, prop) in obj.properties.iter() {
+            collect_string_fields(*field_hash, &prop.value, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_string_fields<'a>(field: u32, value: &'a PropertyValue, out: &mut Vec<(u32, &'a str)>) {
+    match value {
+        PropertyValue::String(s) => out.push((field, s.as_str())),
+        PropertyValue::Struct(s) | PropertyValue::Embedded(s) => {
+            for (inner, prop) in s.properties.iter() {
+                collect_string_fields(*inner, &prop.value, out);
+            }
+        }
+        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
+            for v in items {
+                // The item carries no field of its own, so a bare string here is skipped;
+                // a struct item's own properties are reported under their own hashes.
+                if !matches!(v, PropertyValue::String(_)) {
+                    collect_string_fields(field, v, out);
+                }
+            }
+        }
+        PropertyValue::Optional(inner) => {
+            if let Some(v) = inner.as_ref().as_ref() {
+                collect_string_fields(field, v, out);
+            }
+        }
+        PropertyValue::Map(entries) => {
+            for (_k, v) in entries {
+                if !matches!(v, PropertyValue::String(_)) {
+                    collect_string_fields(field, v, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Owned copy of every string value. Prefer [`string_refs`] unless ownership is needed.
 pub fn extract_strings(tree: &BinTree) -> Vec<String> {
     string_refs(tree).into_iter().map(str::to_string).collect()

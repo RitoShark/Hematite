@@ -4,6 +4,7 @@
 //! Detection is read-only — it examines the BIN tree and returns true/false.
 
 pub mod bnk;
+pub mod anm_scope;
 pub mod dead_asset;
 pub mod dead_links;
 pub mod replaced_bin;

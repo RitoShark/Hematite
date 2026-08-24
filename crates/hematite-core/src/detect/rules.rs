@@ -107,8 +107,14 @@ pub fn detect_issue(rule: &DetectionRule, ctx: &FixContext) -> bool {
         DetectionRule::DeadAssetReference {
             extensions,
             path_prefixes,
+            suppress_never_loaded,
             ..
-        } => crate::detect::dead_asset::detect(ctx, extensions, path_prefixes),
+        } => crate::detect::dead_asset::detect(
+            ctx,
+            extensions,
+            path_prefixes,
+            *suppress_never_loaded,
+        ),
     }
 }
 

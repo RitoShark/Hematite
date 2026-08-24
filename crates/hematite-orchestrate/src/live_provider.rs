@@ -139,6 +139,16 @@ impl GameProvider for LiveGameProvider {
             .get_or_init(|| self.build_shader_defs())
             .clone()
     }
+    fn wads_touched(&self, hashes: &HashSet<u64>) -> Option<usize> {
+        // Every archive, not the primed subset: a shared-asset collision reaches archives
+        // no champion name would ever point at, which is the whole signal.
+        Some(
+            self.index
+                .lock()
+                .expect("poisoned")
+                .count_wads_containing(hashes),
+        )
+    }
 }
 
 #[cfg(test)]

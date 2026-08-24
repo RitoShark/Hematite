@@ -624,6 +624,26 @@ fn process_wad_file(
     let mut loose_texture_verdict = None;
 
 
+    // Every string the mod's BINs name, collected once.
+    //
+    // Three measurements below want the same list, and walking every BIN three times to
+    // build three identical copies of it was costing more than any of them. Built lazily:
+    // a run with all three disabled should not pay for it at all.
+    //
+    // Whose champion this is comes along for the ride, for the same reason: another
+    // champion's leftovers must not count against the mod, and finding out is a scan.
+    let string_references = std::cell::OnceCell::<Vec<String>>::new();
+    let collect_references = || {
+        string_references.get_or_init(|| {
+            let _t = hematite_core::timing::span("collect BIN strings");
+            early_parsed
+                .values()
+                .flat_map(hematite_core::walk::string_refs)
+                .map(str::to_string)
+                .collect()
+        })
+    };
+
     // Proportion checks: what share of the art a mod references actually resolves. Runs
     // here, before the WAD pipeline converts anything, for the same reason the
     // loose-texture measurement does: afterwards the archive no longer reflects what the
@@ -631,16 +651,12 @@ fn process_wad_file(
     let mut ratio_findings: Vec<hematite_types::diagnostic::Diagnostic> = Vec::new();
     if !config.ratio_checks.is_empty() {
         let _t = hematite_core::timing::span("ratio checks");
-        let references: Vec<String> = early_parsed
-            .values()
-            .flat_map(hematite_core::walk::string_refs)
-            .map(str::to_string)
-            .collect();
+        let references = collect_references();
         let game_ref = live.map(|l| l as &dyn GameProvider);
         ratio_findings = hematite_core::check::asset_ratio::run_all(
             &config.ratio_checks,
             &config.reasons,
-            &references,
+            references,
             |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
         );
     }
@@ -657,19 +673,86 @@ fn process_wad_file(
             .filter_map(|(_, path, _)| hematite_core::seeds::character_of(path))
             .next()
             .unwrap_or_default();
-        let references: Vec<String> = early_parsed
-            .values()
-            .flat_map(hematite_core::walk::string_refs)
-            .map(str::to_string)
-            .collect();
+        let references = collect_references();
         let game_ref = live.map(|l| l as &dyn GameProvider);
         vfx_finding = hematite_core::check::vfx_ratio::run(
             &config.vfx_ratio,
             &config.reasons,
-            &references,
+            references,
             &champion,
             |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
         );
+    }
+
+
+
+
+    // Textures a render pass binds without a fallback. Map mods only.
+    let mut required_texture_findings: Vec<hematite_types::diagnostic::Diagnostic> = Vec::new();
+    if !config.required_textures.is_empty() {
+        let fields = hematite_core::check::required_texture::RequiredTextureField::from_config(
+            &config.required_textures,
+        );
+        let is_map = hematite_core::check::required_texture::is_map_mod(
+            all_files.iter().map(|(_, path, _)| path.as_str()),
+        );
+        if !fields.is_empty() && is_map {
+            let _t = hematite_core::timing::span("required textures");
+            let game_ref = live.map(|l| l as &dyn GameProvider);
+            required_texture_findings = hematite_core::check::required_texture::run(
+                &fields,
+                &config.reasons,
+                early_parsed.values(),
+                |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
+            );
+        }
+    }
+
+    // Effects a specific champion cannot be played without, measured on their own.
+    let mut signature_findings: Vec<hematite_types::diagnostic::Diagnostic> = Vec::new();
+    if !config.signature_vfx.is_empty() {
+        let _t = hematite_core::timing::span("signature vfx");
+        let champion = all_files
+            .iter()
+            .filter_map(|(_, path, _)| hematite_core::seeds::character_of(path))
+            .next()
+            .unwrap_or_default();
+        let references = collect_references();
+        let game_ref = live.map(|l| l as &dyn GameProvider);
+        signature_findings = hematite_core::check::signature_vfx::run_all(
+            &config.signature_vfx,
+            &config.reasons,
+            references,
+            &champion,
+            |p| wad_provider.has_path(p) || game_ref.is_some_and(|g| g.has_path(p)),
+        );
+    }
+
+    // Archive fan-out: how many game archives this mod would be written into. Off unless
+    // configured, because it is the only check that needs every archive's listing.
+    let mut fanout_finding: Option<hematite_types::diagnostic::Diagnostic> = None;
+    if config.wad_fanout.enabled {
+        if let (Some(reason), Some(game)) = (
+            config.wad_fanout.reason.as_deref(),
+            live.map(|l| l as &dyn GameProvider),
+        ) {
+            let _t = hematite_core::timing::span("wad fanout");
+            let hashes: std::collections::HashSet<u64> =
+                all_files.iter().map(|(h, _, _)| *h).collect();
+            if let Some(count) = game.wads_touched(&hashes) {
+                if count > config.wad_fanout.threshold {
+                    tracing::info!("fan-out: this mod writes into {count} game archive(s)");
+                    fanout_finding = Some(
+                        hematite_types::diagnostic::Diagnostic::new(
+                            &config.reasons,
+                            reason,
+                            "wad_fanout",
+                        )
+                        .with_detail(format!("writes into {count} game archives")),
+                    );
+                }
+            }
+        }
     }
 
     // Loose textures the game will never load.
@@ -777,6 +860,28 @@ fn process_wad_file(
 
 
     if let Some(finding) = &vfx_finding {
+        total_result.report.push(finding.clone());
+        total_result.report.attach_catalog(&config.reasons);
+    }
+
+
+
+
+    if !required_texture_findings.is_empty() {
+        for finding in &required_texture_findings {
+            total_result.report.push(finding.clone());
+        }
+        total_result.report.attach_catalog(&config.reasons);
+    }
+
+    if !signature_findings.is_empty() {
+        for finding in &signature_findings {
+            total_result.report.push(finding.clone());
+        }
+        total_result.report.attach_catalog(&config.reasons);
+    }
+
+    if let Some(finding) = &fanout_finding {
         total_result.report.push(finding.clone());
         total_result.report.attach_catalog(&config.reasons);
     }

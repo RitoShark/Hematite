@@ -81,6 +81,14 @@ pub struct ReasonDef {
     /// itself meaningful: it tells the UI not to offer a repair button.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remedy: Option<String>,
+    /// The same finding stated for whoever is making the mod.
+    ///
+    /// A player wants to know what the launcher will do about it; an author wants to know
+    /// what is wrong in their files and how to correct it. Those are different sentences,
+    /// and collapsing them into one serves neither, so both ship and the caller picks.
+    /// Absent where the two audiences genuinely want the same words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
 }
 
 impl ReasonDef {
@@ -338,6 +346,7 @@ mod tests {
                 title: "Dead gear link".into(),
                 explain: "Points at an entry that does not exist.".into(),
                 remedy: Some("Run Deep Repair.".into()),
+                author: None,
             },
         );
         reasons.insert(
@@ -347,6 +356,7 @@ mod tests {
                 title: "Bugged health bar".into(),
                 explain: "Renders in the wrong style.".into(),
                 remedy: Some("Run Repair.".into()),
+                author: None,
             },
         );
         reasons.insert(
@@ -356,6 +366,7 @@ mod tests {
                 title: "Outdated map format".into(),
                 explain: "Older than this patch understands.".into(),
                 remedy: None,
+                author: None,
             },
         );
         ReasonCatalog { reasons }

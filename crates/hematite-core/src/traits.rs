@@ -108,6 +108,18 @@ pub trait GameProvider: Send + Sync {
     fn shader_defs(&self) -> Option<std::sync::Arc<std::collections::HashSet<u32>>> {
         None
     }
+
+    /// How many distinct game archives contain any of these chunk hashes.
+    ///
+    /// Answers the fan-out question: a mod colliding with shared assets is written into
+    /// every archive holding a copy. `None` when the provider cannot say, which callers
+    /// must treat as "unknown" rather than "none".
+    ///
+    /// Separate from the other lookups because it needs every archive's table of
+    /// contents, not just the ones a mod's own content points at.
+    fn wads_touched(&self, _hashes: &std::collections::HashSet<u64>) -> Option<usize> {
+        None
+    }
 }
 
 #[cfg(test)]

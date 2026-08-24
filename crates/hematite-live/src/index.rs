@@ -145,6 +145,40 @@ impl GameIndex {
         loaded
     }
 
+    /// How many of the install's archives contain any of these hashes.
+    ///
+    /// This is the fan-out signal: a mod whose files collide with shared game assets is
+    /// written into every archive that holds a copy, which bloats the overlay and can
+    /// disturb unrelated mods.
+    ///
+    /// Deliberately does NOT go through the index. Answering this needs every archive's
+    /// listing, and folding all of them in would change what every other check sees
+    /// resolve, on top of holding a few million entries no one reads. Reading the tables
+    /// and testing them in place has neither cost.
+    ///
+    /// Locale variants are skipped; they duplicate the base archive under the same hashes
+    /// and would inflate the count.
+    pub fn count_wads_containing(&self, hashes: &HashSet<u64>) -> usize {
+        if hashes.is_empty() {
+            return 0;
+        }
+        let root = self.game_dir.join("DATA").join("FINAL");
+        walkdir::WalkDir::new(&root)
+            .into_iter()
+            .flatten()
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| {
+                let name = e.file_name().to_str().unwrap_or_default().to_lowercase();
+                name.ends_with(".wad.client") && !name.contains(".en_")
+            })
+            .filter(|e| {
+                read_toc(e.path())
+                    .map(|toc| toc.chunks.iter().any(|c| hashes.contains(&c.path_hash)))
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
     pub fn has_hash(&self, h: u64) -> bool {
         self.by_hash.contains_key(&h)
     }
@@ -244,6 +278,69 @@ mod tests {
         );
         // add_champion for a champion with no WAD is a no-op returning false
         assert!(!idx.add_champion("nonexistent_champ"));
+    }
+
+    /// The fan-out count is over archives, not chunks, and skips locale duplicates.
+    #[test]
+    fn fanout_counts_archives_holding_any_of_the_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let final_dir = dir.path().join("Game/DATA/FINAL");
+        std::fs::create_dir_all(final_dir.join("Champions")).unwrap();
+
+        // Two archives hold the shared asset, one holds only its own.
+        write_fixture_wad(
+            &final_dir.join("Champions/A.wad.client"),
+            &[("data/shared.bin", b"x"), ("data/a.bin", b"x")],
+        );
+        write_fixture_wad(
+            &final_dir.join("Champions/B.wad.client"),
+            &[("data/shared.bin", b"x")],
+        );
+        write_fixture_wad(
+            &final_dir.join("Champions/C.wad.client"),
+            &[("data/c.bin", b"x")],
+        );
+        // A locale variant duplicates its base under the same hashes and must not count.
+        write_fixture_wad(
+            &final_dir.join("Champions/A.en_US.wad.client"),
+            &[("data/shared.bin", b"x")],
+        );
+
+        std::fs::write(dir.path().join("Game").join("League of Legends.exe"), b"").unwrap();
+        let install = crate::detect::LeagueInstall::from_path(dir.path()).unwrap();
+        let idx = GameIndex::new(&install);
+
+        let shared: HashSet<u64> = [wad_path_hash("data/shared.bin")].into_iter().collect();
+        assert_eq!(idx.count_wads_containing(&shared), 2, "A and B, not the locale");
+
+        let only_c: HashSet<u64> = [wad_path_hash("data/c.bin")].into_iter().collect();
+        assert_eq!(idx.count_wads_containing(&only_c), 1);
+
+        let absent: HashSet<u64> = [wad_path_hash("data/nowhere.bin")].into_iter().collect();
+        assert_eq!(idx.count_wads_containing(&absent), 0);
+
+        assert_eq!(idx.count_wads_containing(&HashSet::new()), 0);
+    }
+
+    /// Counting must not fold the archives into the index: doing so would change what
+    /// every other check sees resolve.
+    #[test]
+    fn fanout_counting_leaves_the_index_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let final_dir = dir.path().join("Game/DATA/FINAL");
+        std::fs::create_dir_all(&final_dir).unwrap();
+        write_fixture_wad(&final_dir.join("A.wad.client"), &[("data/a.bin", b"x")]);
+
+        std::fs::write(dir.path().join("Game").join("League of Legends.exe"), b"").unwrap();
+        let install = crate::detect::LeagueInstall::from_path(dir.path()).unwrap();
+        let idx = GameIndex::new(&install);
+
+        let hashes: HashSet<u64> = [wad_path_hash("data/a.bin")].into_iter().collect();
+        assert_eq!(idx.count_wads_containing(&hashes), 1);
+        assert!(
+            !idx.has_path("data/a.bin"),
+            "counting must not prime the index"
+        );
     }
 
     #[test]

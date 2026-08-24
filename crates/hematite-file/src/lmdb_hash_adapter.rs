@@ -210,45 +210,6 @@ fn open_env(lmdb_dir: &Path) -> Result<Env> {
     unsafe { opts.open(lmdb_dir) }.context("Failed to open LMDB environment")
 }
 
-fn load_wad_db(env: &Env, rtxn: &RoTxn<'_>) -> Result<HashMap<u64, String>> {
-    let wad_db: Database<Bytes, Str> = env
-        .open_database(rtxn, Some("wad"))
-        .context("Failed to query 'wad' database")?
-        .context("'wad' database not found — LMDB doesn't look like a valid hashes bundle")?;
-
-    let mut out = HashMap::new();
-    for item in wad_db
-        .iter(rtxn)
-        .context("Failed to iterate 'wad' database")?
-    {
-        let (key_bytes, name) = item.context("Failed to read 'wad' entry")?;
-        if let Some(hash) = read_u64_be(key_bytes) {
-            out.insert(hash, name.to_string());
-        }
-    }
-    Ok(out)
-}
-
-/// Load the current-schema merged `bin` database.
-fn load_bin_db(env: &Env, rtxn: &RoTxn<'_>) -> Result<HashMap<u32, String>> {
-    let bin_db: Database<Bytes, Str> = env
-        .open_database(rtxn, Some("bin"))
-        .context("Failed to query 'bin' database")?
-        .context("'bin' database not found")?;
-
-    let mut out = HashMap::new();
-    for item in bin_db
-        .iter(rtxn)
-        .context("Failed to iterate 'bin' database")?
-    {
-        let (key_bytes, name) = item.context("Failed to read 'bin' entry")?;
-        if let Some(hash) = read_u32_be(key_bytes) {
-            out.insert(hash, name.to_string());
-        }
-    }
-    Ok(out)
-}
-
 /// Load the legacy schema (`types` + `fields` + `entries`) and merge
 /// it into the same map shape as the new `bin` database.
 fn load_legacy_bin_dbs(env: &Env, rtxn: &RoTxn<'_>) -> Result<HashMap<u32, String>> {
@@ -288,10 +249,6 @@ fn read_u32_be(bytes: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(arr))
 }
 
-fn read_u64_be(bytes: &[u8]) -> Option<u64> {
-    let arr: [u8; 8] = bytes.try_into().ok()?;
-    Some(u64::from_be_bytes(arr))
-}
 
 // ---------------------------------------------------------------------------
 // Provider impl

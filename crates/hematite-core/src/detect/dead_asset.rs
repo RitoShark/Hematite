@@ -49,6 +49,7 @@ pub fn dead_refs(
     ctx: &FixContext,
     extensions: &[String],
     path_prefixes: &[String],
+    suppress_never_loaded: bool,
 ) -> Vec<String> {
     let Some(game) = ctx.game else {
         return Vec::new();
@@ -56,6 +57,15 @@ pub fn dead_refs(
 
     let exts: Vec<String> = extensions.iter().map(|e| e.to_lowercase()).collect();
     let prefixes: Vec<String> = path_prefixes.iter().map(|p| p.to_lowercase()).collect();
+
+    // Clips that are dead on paper but that the engine never asks for. Only animations
+    // can be in this set, so it is built only for a rule that looks at them: the walk is
+    // not free and every other rule would get an empty set for the money.
+    let never_loaded = if suppress_never_loaded && exts.iter().any(|e| e == ".anm") {
+        crate::detect::anm_scope::never_loaded(&ctx.tree)
+    } else {
+        std::collections::HashSet::new()
+    };
 
     let mut dead = Vec::new();
     for s in string_refs(&ctx.tree) {
@@ -76,6 +86,13 @@ pub fn dead_refs(
                 continue;
             }
         }
+        // The clip is genuinely absent, but nothing ever asks the engine for it.
+        if !never_loaded.is_empty()
+            && never_loaded.contains(&crate::detect::anm_scope::normalize(s))
+        {
+            tracing::debug!("dead but never loaded, not reported: {}", s);
+            continue;
+        }
         dead.push(s.to_string());
     }
 
@@ -85,8 +102,13 @@ pub fn dead_refs(
 }
 
 /// Boolean verdict for the detection dispatch.
-pub fn detect(ctx: &FixContext, extensions: &[String], path_prefixes: &[String]) -> bool {
-    !dead_refs(ctx, extensions, path_prefixes).is_empty()
+pub fn detect(
+    ctx: &FixContext,
+    extensions: &[String],
+    path_prefixes: &[String],
+    suppress_never_loaded: bool,
+) -> bool {
+    !dead_refs(ctx, extensions, path_prefixes, suppress_never_loaded).is_empty()
 }
 
 /// Whether a dead reference in THIS BIN is reached as the mod is used.

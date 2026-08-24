@@ -44,6 +44,83 @@ pub struct FixConfig {
     /// Settings for the ability-VFX measurement.
     #[serde(default)]
     pub vfx_ratio: VfxRatioConfig,
+    /// Settings for the archive fan-out measurement.
+    #[serde(default)]
+    pub wad_fanout: WadFanoutConfig,
+    /// Effects a specific champion cannot be played without.
+    #[serde(default)]
+    pub signature_vfx: Vec<SignatureVfxConfig>,
+    /// Textures a render pass binds without a fallback.
+    #[serde(default)]
+    pub required_textures: Vec<RequiredTextureConfig>,
+}
+
+/// A field whose texture the renderer binds without checking it arrived.
+///
+/// Nearly every missing texture falls back to a default and merely renders wrong. The few
+/// listed here do not: the pass dereferences a null handle and the map fails to load. What
+/// separates them is the field the path is stored in, not the file, so each entry names a
+/// field rather than an extension.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequiredTextureConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Field name, as written in the schema. Hashed with FNV-1a over its lowercased form.
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// One champion's signature effect, measured on its own.
+///
+/// The overall ability-VFX share cannot see these: losing them leaves the rest of the kit
+/// rendering, so the share stays low while the champion's defining mechanic has gone
+/// invisible. Weighting them inside the general ratio would distort every other champion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignatureVfxConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whose effect this is, lowercase.
+    pub champion: String,
+    /// Name fragment identifying the effect, matched case-insensitively.
+    pub contains: String,
+    /// Fire when at least this share of them is missing. Inclusive.
+    pub dead_at: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Settings for the archive fan-out measurement.
+///
+/// A mod whose files collide with shared game assets gets written into every archive that
+/// holds a copy. The game still runs, but the overlay balloons and unrelated mods can be
+/// disturbed, so it is worth telling the author.
+///
+/// Off by default: answering it needs every WAD's table of contents, which no other check
+/// requires, and the cost is not worth paying on every run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WadFanoutConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Warn when the mod would be written into MORE than this many archives.
+    #[serde(default = "default_fanout_threshold")]
+    pub threshold: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+fn default_fanout_threshold() -> usize {
+    50
+}
+
+impl Default for WadFanoutConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: default_fanout_threshold(),
+            reason: None,
+        }
+    }
 }
 
 /// Settings for the ability-VFX measurement.
@@ -483,6 +560,16 @@ pub enum DetectionRule {
         /// active. Real, but conditional, and calling it a crash overstates it.
         #[serde(default)]
         latent_reason: Option<String>,
+        /// Drop dead clips the engine never asks for.
+        ///
+        /// Two cases look dead and are not: an animation on a mesh particle, which just
+        /// renders un-animated, and a clip reachable only through an animation graph the
+        /// skin does not link. Both were found by chasing false positives on real mods.
+        ///
+        /// Only affects `.anm`; nothing else can be in that set. Off by default so a rule
+        /// has to opt in.
+        #[serde(default)]
+        suppress_never_loaded: bool,
     },
 }
 

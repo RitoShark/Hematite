@@ -290,7 +290,7 @@ targets = [
 
 [fixes.cac_pull]
 name = "Voiceover (CAC) Restore"
-description = "Pulls ContextualActionData entries referenced by the skin but missing from the mod out of the live game BIN closure, restoring voiceovers. Unpullable links are kept — the game resolves or ignores them at runtime."
+description = "Pulls ContextualActionData entries referenced by the skin but missing from the mod out of the live game BIN closure, restoring voiceovers. Unpullable links are kept: the game resolves or ignores them at runtime."
 severity = "medium"
 reason = "missing_voiceover"
 
@@ -360,7 +360,7 @@ path_prefixes = ["assets/characters/"]
 
 [wad_fixes.bnk_remover]
 name = "Broken Sound Files"
-description = "Removes orphaned BNK audio files with outdated Wwise versions (only v145+ is valid). Banks the mod's own BINs still reference are kept — they carry the mod's custom audio."
+description = "Removes orphaned BNK audio files with outdated Wwise versions (only v145+ is valid). Banks the mod's own BINs still reference are kept: they carry the mod's custom audio."
 severity = "low"
 
 [wad_fixes.bnk_remover.detect]
@@ -425,7 +425,7 @@ unless_referenced = true
 
 [wad_fixes.strip_mipmaps_tex]
 name = "Strip Mipmaps (TEX)"
-description = "Drops the mip chain from TEX textures. Workaround for the post-2026 League regression where mipmapped textures stop rendering. Disabled by default — opt in per-run if the mod ships affected textures."
+description = "Drops the mip chain from TEX textures. Workaround for the post-2026 League regression where mipmapped textures stop rendering. Disabled by default; opt in per-run if the mod ships affected textures."
 severity = "low"
 
 [wad_fixes.strip_mipmaps_tex.detect]
@@ -496,7 +496,7 @@ assets = [
 
 [wad_fixes.combo_bin_relocate]
 name = "Legacy Combo-Bin Relocation"
-description = "Descriptor only — the actual re-key of legacy data/<champ>_skins_<slots>.bin entries to data/characters/<champ>/<champ>_multi_skins_<slots>.bin runs as a dedicated CLI pipeline step (crates/hematite-cli/src/combo_relocate.rs) gated on this fix id, not through this rule's detect/apply. This entry exists only so the fix id resolves in config for reporting/--check and the ALL_FIX_IDS guard test. The rename pattern below intentionally never matches (^$ matches only the empty string), so it is a guaranteed no-op if the WAD pipeline ever evaluates it directly."
+description = "Descriptor only: the actual re-key of legacy data/<champ>_skins_<slots>.bin entries to data/characters/<champ>/<champ>_multi_skins_<slots>.bin runs as a dedicated CLI pipeline step (crates/hematite-cli/src/combo_relocate.rs) gated on this fix id, not through this rule's detect/apply. This entry exists only so the fix id resolves in config for reporting/--check and the ALL_FIX_IDS guard test. The rename pattern below intentionally never matches (^$ matches only the empty string), so it is a guaranteed no-op if the WAD pipeline ever evaluates it directly."
 severity = "low"
 
 [wad_fixes.combo_bin_relocate.detect]
@@ -570,6 +570,11 @@ reason = "missing_animations"
 [fixes.dead_animation.detect]
 type = "dead_asset_reference"
 extensions = [".anm"]
+# Two kinds of dead clip never reach the engine, and both were found by chasing false
+# positives on real mods: an animation on a mesh particle (the mesh just renders
+# un-animated) and a clip reachable only through an animation graph the skin does not
+# link. Turn this off to see them again.
+suppress_never_loaded = true
 
 [fixes.dead_animation.apply]
 type = "report_only"
@@ -636,60 +641,70 @@ severity = "crash"
 title    = "Outdated material"
 explain  = "A material links a shader that no longer exists in this patch."
 remedy   = "Run Repair to clear the outdated material data."
+author   = "A material links a shader this patch no longer ships. Re-export the material against the current schema, or drop the material data so the game supplies its own."
 
 [reasons.missing_animations]
 severity = "crash"
 title    = "Missing animations"
 explain  = "Animation clips are referenced but shipped by neither the mod nor the game."
 remedy   = "Run Deep Repair to pull the missing animations."
+author   = "Referenced .anm clips ship in neither the mod nor the game. Include the animations, or fix the paths that point at them."
 
 [reasons.dead_gear_link]
 severity = "crash"
 title    = "Dead gear link"
 explain  = "A gear upgrade links to an entry that does not exist, and the game follows that link without checking."
 remedy   = "Run Deep Repair to pull the missing entries."
+author   = "A gear-skin link points at an object that does not exist. Restore the entry it names, or remove the link."
 
 [reasons.replaced_bin_crash]
 severity = "crash"
 title    = "Replaced file drops a required entry"
 explain  = "This mod replaces a game file and removed an entry the game reads without checking whether it is there."
 # No remedy: the dropped entry has to be restored by the mod author.
+author   = "A replaced HUD or interface bin dropped entries the game reads without checking. Usually means the bin is outdated for this patch: rebuild it from the current one."
 
 [reasons.skin_mesh_crash]
 severity = "crash"
 title    = "Missing skin mesh"
 explain  = "The skin names a mesh or skeleton file that does not exist, so the model cannot be built."
 # No remedy: the mesh has to be shipped by the mod.
+author   = "The skin names a .skn or .skl that ships in neither the mod nor the game. Include the mesh, or fix its path."
 
 [reasons.dead_ui_link]
 severity = "crash"
 title    = "Dead interface link"
 explain  = "A replaced interface file removed an element the in-match HUD still expects."
 # No remedy: needs the mod author to restore the element.
+author   = "An interface bin links a child the game dereferences with no fallback. Usually means the bin is outdated for this patch."
 
 [reasons.mapgeo_outdated]
 severity = "crash"
 title    = "Outdated map format"
 explain  = "The map geometry uses a format older than this patch understands."
 # No remedy: needs a full geometry format migration, not something the launcher can do.
+author   = "The .mapgeo is an older format than this engine reads. It needs a geometry re-export for the current patch."
 
 [reasons.missing_map_texture]
 severity = "crash"
 title    = "Missing map texture"
 explain  = "The map needs a texture that does not exist anywhere."
 remedy   = "Run Deep Repair to pull the missing assets."
+author   = "A cubemap probe texture resolves nowhere. That path is bound straight into the lighting pass, so include the texture or repoint the probe."
 
 [reasons.tex_dim_crash]
 severity = "crash"
 title    = "Malformed texture size"
 explain  = "A texture's dimensions are invalid for its compression format."
 remedy   = "Run Repair to rebuild the malformed textures."
+author   = "A block-compressed (DXT/BC) .tex is not sized to a multiple of 4. Re-export it at a width and height that are both multiples of 4."
 
 [reasons.emotes_crash]
 severity = "crash"
 title    = "Malformed emote texture"
 explain  = "An emote texture is malformed and faults when the emote is used in game."
 remedy   = "Run Repair to rebuild the malformed textures."
+author   = "An emote texture is not sized to a multiple of 4 for its compression format. Re-export it at a width and height that are both multiples of 4."
 
 [reasons.unmigrated_animation_path]
 severity = "crash"
@@ -700,24 +715,28 @@ remedy   = "Run Repair to convert the reference to the current format."
 # ─────────────────────────────────────────────────────────────────────────────
 # Unplayable
 # ─────────────────────────────────────────────────────────────────────────────
+author   = "An animation path is still stored as a plain string. Riot moved these to hashed file references, and the old form no longer resolves, so this one has to be converted."
 
 [reasons.no_abilities]
 severity = "unplayable"
 title    = "No abilities"
 explain  = "The champion file is too old to bind any abilities, so nothing can be cast."
 remedy   = "Run Repair to drop the stale champion file so the game uses its own."
+author   = "The character bin carries no ability bindings, so the champion cannot cast anything. The mod ships an outdated character root: rebuild it from the current one."
 
 [reasons.no_ability_vfx]
 severity = "unplayable"
 title    = "Ability effects missing"
 explain  = "Almost none of the champion's ability effects exist, so abilities render nothing."
 remedy   = "Run Deep Repair to pull the missing assets."
+author   = "Almost none of the champion's core ability VFX resolve, so abilities render nothing. Include the particle assets."
 
 [reasons.missing_textures]
 severity = "unplayable"
 title    = "Most textures missing"
 explain  = "Most of the skin's art files are missing, so it renders broken or invisible."
 remedy   = "Run Deep Repair to pull the missing assets."
+author   = "Most referenced particle and texture assets resolve nowhere, so the art will not display. Include them, and check for repath-suffix mismatches."
 
 [reasons.loose_textures_unplayable]
 severity = "unplayable"
@@ -728,48 +747,56 @@ remedy   = "Run Repair to convert the loose textures."
 # ─────────────────────────────────────────────────────────────────────────────
 # Warning
 # ─────────────────────────────────────────────────────────────────────────────
+author   = "The mod ships texture files no bin references, so nothing binds them and the skin renders untextured. Wire them up in the skin data, or ship the bin that names them."
 
 [reasons.bugged_hp_bar]
 severity = "warning"
 title    = "Bugged health bar"
 explain  = "The health bar above the champion renders in the wrong style."
 remedy   = "Run Repair to reset the health bar style."
+author   = "The skin's HP-bar style is not the standard one, so the health bar renders wrong. Set UnitHealthBarStyle on the skin's health-bar record."
 
 [reasons.missing_particles]
 severity = "warning"
 title    = "Missing particles"
 explain  = "Many particle effects point at files that do not exist, so effects render wrong."
 remedy   = "Run Deep Repair to pull the missing assets."
+author   = "Some referenced particle and texture assets resolve nowhere, so a few effects render wrong. Not enough to break the skin, but worth including them."
 
 [reasons.replaced_bin_warning]
 severity = "warning"
 title    = "Replaced file drops an entry"
 explain  = "This mod removed an entry the game reads, but the game checks before using it."
 # No remedy: needs the mod author to restore the entry.
+author   = "A replaced bin dropped an entry the game does check for. The champion is partially bugged rather than crashing, but the entry is still missing."
 
 [reasons.latent_dead_animation]
 severity = "warning"
 title    = "Latent dead animation"
 explain  = "A dead animation sits on a skin this mod does not use. Selecting that original skin while the mod is active would crash."
 # No remedy: harmless as used, so the launcher does not touch it.
+author   = "A dead .anm sits in a skin bin the mod does not wire up. Fine as the mod is used, but selecting that original skin with the mod active would crash."
 
 [reasons.screen_gated_dead_link]
 severity = "warning"
 title    = "Dead link on one screen"
 explain  = "A removed interface element is only used on one specific screen, so it crashes there rather than in normal play."
 # No remedy: needs the mod author to restore the element.
+author   = "A removed interface element is only reached on one screen, so it crashes there rather than in normal play. Restore the element."
 
 [reasons.missing_voiceover]
 severity = "warning"
 title    = "Missing voiceover"
 explain  = "The skin's contextual voice lines are not defined anywhere, so it loses its voiceover."
 remedy   = "Run Deep Repair to pull the missing entries."
+author   = "Voice and character audio the skin names is not shipped. The skin plays silent lines until it is included."
 
 [reasons.visually_bugged_vfx]
 severity = "warning"
 title    = "Some ability effects missing"
 explain  = "A noticeable share of the champion's ability effects are missing, so some abilities do not render properly."
 remedy   = "Run Deep Repair to pull the missing assets."
+author   = "A noticeable share of the champion's core ability VFX are missing, so some abilities render wrong. Include the particle assets."
 
 [reasons.stale_character_stats]
 severity = "warning"
@@ -777,47 +804,58 @@ title    = "Stale champion stats"
 explain  = "The champion file is old enough to carry wrong base stats, so movement speed and damage may be off."
 remedy   = "Run Repair to drop the stale champion file so the game uses its own."
 
+# Unplayable rather than a warning, and that distinction is the whole point of the check.
+# The ability still fires, so the general ability-VFX share barely moves, but the indicator
+# is how the player knows which walls it works on. Without it the mechanic cannot be used.
+author   = "The champion file predates the current schema and can carry wrong base stats. Drop it so the game uses its own, or rebuild it from the current one."
 [reasons.talon_edgemesh_missing]
-severity = "warning"
+severity = "unplayable"
 title    = "Missing wall-vault indicator"
-explain  = "The effect showing which walls can be vaulted is missing. The ability still works."
+explain  = "The effect showing which walls can be vaulted is missing, so there is no way to tell where the ability works."
 remedy   = "Run Deep Repair to pull the missing assets."
+author   = "The wall-vault (Edgemesh) VFX are missing, so vaultable walls render invisible and the ability cannot be aimed. Include those particles."
 
 [reasons.excessive_wad_fanout]
 severity = "warning"
 title    = "Writes into many game files"
 explain  = "The mod's files collide with shared game files, so installing it touches many game archives and can disturb other mods."
 remedy   = "Run Deep Repair to drop the redundant shared copies."
+author   = "The mod's files collide with shared game assets, so installing it writes into many archives and can disturb other mods. Ship only the files the mod actually replaces."
 
 [reasons.unmigrated_hud_asset]
 severity = "warning"
 title    = "Interface asset uses the old format"
 explain  = "An interface or loading screen asset is stored as text, but this patch expects the newer hashed form, so the element does not resolve."
 remedy   = "Run Repair to convert the reference to the current format."
+author   = "An interface or loading-screen asset is still stored as a plain string. Riot moved these to hashed file references, so the element no longer resolves."
 
 [reasons.unmigrated_asset]
 severity = "warning"
 title    = "Asset reference uses the old format"
 explain  = "An asset reference is stored as text, but this patch expects the newer hashed form."
 remedy   = "Run Repair to convert the reference to the current format."
+author   = "An asset reference is still stored as a plain string. Riot moved these to hashed file references, so convert it to the current form."
 
 [reasons.icons_not_loading]
 severity = "warning"
 title    = "Icons do not load"
 explain  = "The skin's icons point at a texture format the game no longer loads, so they render black or missing."
 remedy   = "Run Repair to convert the icons."
+author   = "The skin's icons point at .dds, which the client no longer loads. Point them at the .tex form instead."
 
 [reasons.textures_not_loading]
 severity = "warning"
 title    = "Textures do not load"
 explain  = "Textures are referenced in a format the game no longer loads, so surfaces render black or untextured."
 remedy   = "Run Repair to convert the texture references."
+author   = "Textures are referenced as .dds, which the client no longer loads. Point them at the .tex form instead."
 
 [reasons.outdated_mesh_format]
 severity = "warning"
 title    = "Outdated mesh format"
 explain  = "A mesh uses an older format the game no longer reads, so that piece of the model does not render."
 remedy   = "Run Repair to convert the meshes."
+author   = "A mesh is in the older .sco/.scb format the game no longer reads. Convert it so the piece renders."
 
 [reasons.map_mesh_missing]
 severity = "warning"
@@ -835,6 +873,7 @@ remedy   = "Run Deep Repair to pull the missing assets."
 # Only applies to mods that define no skin of their own. A mod shipping a real skin BIN
 # is wiring its art up and its loose files are intermediates; judging those by this ratio
 # condemns working mods.
+author   = "A minion, turret, structure or piece of scenery names a mesh that does not exist. It only breaks when the game loads that variant, so it is not certain, but the mesh is still missing."
 
 [loose_textures]
 enabled = true
@@ -901,3 +940,55 @@ audio_markers = ["audio", "sound", "_sfx", "_vo_", "_vo."]
 cosmetic_markers = ["recall", "idle", "emote", "taunt", "dance", "home", "hud", "death", "spawn", "joke", "laugh", "respawn", "lvlup", "levelup", "ambient"]
 # Helper overlays rather than the ability itself.
 subhelper_markers = ["_marker", "_alert", "_health_lvl", "_timer", "_timeout", "_ring", "_range", "_zaconly", "_tether"]
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ARCHIVE FAN-OUT
+# ═════════════════════════════════════════════════════════════════════════════
+# A mod whose files collide with shared game assets is written into every archive that
+# holds a copy. The game still runs, but the overlay balloons and unrelated mods can be
+# disturbed, which is worth telling the author.
+#
+# Enabled, but note it is the only check that needs EVERY archive's table of contents.
+# That listing is read once per run and only when this is on.
+
+[wad_fanout]
+enabled   = true
+threshold = 50
+reason    = "excessive_wad_fanout"
+
+# =============================================================================
+# SIGNATURE EFFECTS
+# =============================================================================
+# A few champions carry a mechanic inside one VFX. Talon's E vaults walls, and the Edgemesh
+# particles draw the indicator on every vaultable edge: lose them and the rest of his kit
+# still renders, so the overall ability-VFX share stays low while his defining mechanic has
+# gone invisible.
+#
+# Measured separately for exactly that reason. Weighting them inside the general ratio
+# heavily enough to move it would distort every other champion.
+#
+# Add the next champion here rather than in code.
+
+[[signature_vfx]]
+champion = "talon"
+contains = "edgemesh"
+dead_at  = 0.80
+reason   = "talon_edgemesh_missing"
+
+# =============================================================================
+# REQUIRED RENDER TEXTURES
+# =============================================================================
+# Nearly every missing texture falls back to a default and merely renders wrong. These do
+# not: the path is bound straight into the map's lighting pass with no null check, so an
+# absent file leaves the handle empty and the pass dereferences it at bind time. The map
+# does not render wrong, it does not load.
+#
+# What separates them is the FIELD the path sits in, not the file, so each entry names a
+# field. TerrainPaintTexturePath looks like it belongs here and does not: a missing terrain
+# paint texture falls back like any other.
+#
+# Only walked for map mods; these fields appear nowhere else.
+
+[[required_textures]]
+field  = "CubemapProbePath"
+reason = "missing_map_texture"

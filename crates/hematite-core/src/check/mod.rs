@@ -20,6 +20,8 @@
 
 pub mod asset_ratio;
 pub mod loose_textures;
+pub mod required_texture;
+pub mod signature_vfx;
 pub mod vfx_ratio;
 
 use crate::context::FixContext;
@@ -196,9 +198,15 @@ pub fn diagnose_fired_rule(
         downgrade_markers,
         downgrade_reason,
         latent_reason,
+        suppress_never_loaded,
     } = &rule.detect
     {
-        let dead = crate::detect::dead_asset::dead_refs(ctx, extensions, path_prefixes);
+        let dead = crate::detect::dead_asset::dead_refs(
+            ctx,
+            extensions,
+            path_prefixes,
+            *suppress_never_loaded,
+        );
         if dead.is_empty() {
             return Vec::new();
         }
@@ -370,6 +378,7 @@ mod tests {
                 title: "Animation path uses the old format".into(),
                 explain: "Stored as text, unreadable by this patch.".into(),
                 remedy: Some("Run Repair.".into()),
+                author: None,
             },
         );
         reasons.insert(
@@ -379,6 +388,7 @@ mod tests {
                 title: "Interface asset uses the old format".into(),
                 explain: "Stored as text, does not resolve.".into(),
                 remedy: Some("Run Repair.".into()),
+                author: None,
             },
         );
         ReasonCatalog { reasons }
