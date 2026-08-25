@@ -1,7 +1,7 @@
 {
-    "latest_cli_version": "0.6.0",
+    "latest_cli_version": "0.6.1",
     "min_cli_version": "0.4.1",
     "download_url": "https://github.com/RitoShark/Hematite/releases/latest",
-    "release_notes": "Fixed WADs are written as unpacked folders and collected in a Hematite-Fixed folder; referenced soundbanks and animations are no longer deleted; CAC voiceover links are kept; fantomes are compressed again",
+    "release_notes": "Required update. Un-hashes chunks the dictionary can't name using the mod's own BIN paths, so custom textures are fixed instead of skipped; keeps referenced soundbanks and animations; keeps CAC voiceover links; writes WAD folders into Hematite-Fixed",
     "advisories": []
 }
