@@ -325,6 +325,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         restore_anm,
         cli.game_wad.as_deref(),
         relocate_combo_bins,
+        cli.output.as_deref(),
     )?;
 
     let duration = start_time.elapsed().as_secs_f64();

@@ -18,9 +18,12 @@ use hematite_types::champion::CharacterRelations;
 use hematite_types::config::FixConfig;
 use hematite_types::repath::RepathOptions;
 use hematite_types::result::{CheckInfo, ProcessResult};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
+
+/// Folder finished mods are written into, next to the input.
+pub const OUTPUT_DIR_NAME: &str = "Hematite-Fixed";
 
 /// Session-level parameters shared by every file processing function.
 ///
@@ -55,6 +58,31 @@ struct ProcessContext<'a> {
     /// in `main.rs`. The config entry in `fix_config.json` (`wad_fixes`)
     /// is a descriptor only — this field is what actually gates the step.
     relocate_combo_bins: bool,
+    /// Root the inputs were discovered under: the folder itself in batch
+    /// mode, the file's parent otherwise. Sub-folder structure below it is
+    /// mirrored into `out_dir` so same-named mods can't overwrite each other.
+    input_root: PathBuf,
+    /// Where finished mods land, keeping their original file name.
+    out_dir: PathBuf,
+}
+
+impl ProcessContext<'_> {
+    /// Final resting place for a finished mod. `None` for intermediates —
+    /// those are processed inside a temp dir, which is never under
+    /// `input_root`, so they keep their old in-place naming.
+    fn output_for(&self, input: &Path) -> Option<PathBuf> {
+        let rel = input.strip_prefix(&self.input_root).ok()?;
+        Some(self.out_dir.join(rel))
+    }
+}
+
+/// Create the parent directory of a final output path.
+fn ensure_parent(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create output folder {}", parent.display()))?;
+    }
+    Ok(())
 }
 
 /// Load hash provider with LMDB fallback to TXT.
@@ -140,6 +168,7 @@ pub fn process_input(
     restore_anm: bool,
     game_wad: Option<&Path>,
     relocate_combo_bins: bool,
+    output_dir: Option<&Path>,
 ) -> Result<ProcessResult> {
     // Load hash provider once for all files. The bar shows a stage
     // label so the user sees something happen during the (slow) LMDB
@@ -149,6 +178,17 @@ pub fn process_input(
     // collide with the spinner.
     ui.stage("Loading hash dictionary…");
     let hash_provider = load_hash_provider(&ui)?;
+
+    // A batch walks the folder itself; a single mod is rooted at its parent
+    // so its own name is the only relative component.
+    let input_root = if input.is_dir() && !is_wad_folder(input) {
+        input.to_path_buf()
+    } else {
+        input.parent().unwrap_or(Path::new(".")).to_path_buf()
+    };
+    let out_dir = output_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| input_root.join(OUTPUT_DIR_NAME));
 
     let ctx = ProcessContext {
         config,
@@ -162,6 +202,8 @@ pub fn process_input(
         restore_anm,
         game_wad,
         relocate_combo_bins,
+        input_root,
+        out_dir,
     };
 
     if ctx.restore_anm {
@@ -185,10 +227,10 @@ pub fn process_input(
                 let entry = entry.context("Failed to read directory entry")?;
                 let path = entry.path().to_path_buf();
 
-                // Never re-process our own output: a `.fixed.*` written
-                // earlier in this walk can be handed back by readdir, and
-                // fixing an already-fixed mod is the double-fix damage case.
-                if is_own_output(&path) {
+                // Never re-process our own output: results written earlier
+                // in this walk can be handed back by readdir, and fixing an
+                // already-fixed mod is the double-fix damage case.
+                if path == ctx.out_dir || is_own_output(&path) {
                     tracing::debug!("Skipping previously fixed output: {}", path.display());
                     if path.is_dir() {
                         it.skip_current_dir();
@@ -231,7 +273,12 @@ pub fn process_input(
 fn is_own_output(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.to_lowercase().contains(".fixed."))
+        .map(|n| {
+            let lower = n.to_lowercase();
+            // `.fixed.` covers outputs from before results moved into their
+            // own folder, which users still have lying around.
+            lower == OUTPUT_DIR_NAME.to_lowercase() || lower.contains(".fixed.")
+        })
         .unwrap_or(false)
 }
 
@@ -305,6 +352,10 @@ fn process_bin_file(
         ctx.check,
         ctx.live,
     );
+    // Resolved before the FixContext below shadows `ctx`.
+    let bin_output = ctx
+        .output_for(file)
+        .unwrap_or_else(|| file.with_extension("fixed.bin"));
     let ui = ctx.ui.clone();
     ui.stage(&format!(
         "Processing {}…",
@@ -387,7 +438,8 @@ fn process_bin_file(
             .context("Failed to write modified BIN file")?;
 
         // Write to output file (original.bin → original.fixed.bin)
-        let output_path = file.with_extension("fixed.bin");
+        let output_path = bin_output;
+        ensure_parent(&output_path)?;
         std::fs::write(&output_path, &modified_bytes)
             .context("Failed to save modified BIN file")?;
 
@@ -1251,7 +1303,10 @@ fn process_wad_file(
 
         // Output is an unpacked WAD *folder* (paths already un-hashed via the
         // LMDB dictionary during extraction), never a repacked .wad.client.
-        let output_path = hematite_orchestrate::fix_folder::fixed_wad_output_path(file);
+        let output_path = ctx
+            .output_for(file)
+            .unwrap_or_else(|| hematite_orchestrate::fix_folder::fixed_wad_output_path(file));
+        ensure_parent(&output_path)?;
         let chunks_included = hematite_file::wad_folder::write_wad_folder(
             &output_path,
             &all_files,
@@ -1324,6 +1379,10 @@ fn process_wad_folder(
     ctx: &ProcessContext<'_>,
     hash_provider: &Arc<dyn HashProvider>,
 ) -> Result<ProcessResult> {
+    let folder_output = ctx.output_for(folder);
+    if let Some(path) = &folder_output {
+        ensure_parent(path)?;
+    }
     let opts = hematite_orchestrate::FixOptions {
         // `ctx.dry_run` is already `cli.dry_run || cli.check`; `detect_only`
         // carries the `--check` flag so the library populates CheckInfo and
@@ -1337,6 +1396,7 @@ fn process_wad_folder(
         live: ctx.live,
         // The CLI keeps producing the non-destructive `.fixed` copy.
         in_place: false,
+        output: folder_output.as_deref(),
     };
     let sink = crate::ui::UiSink(&ctx.ui);
     hematite_orchestrate::fix_folder(
@@ -1504,7 +1564,10 @@ fn process_modpkg_file(
 
     // === MODPKG REPACK ===
     if !dry_run && total_result.fixes_applied > 0 {
-        let output_path = file.with_extension("fixed.modpkg");
+        let output_path = ctx
+            .output_for(file)
+            .unwrap_or_else(|| file.with_extension("fixed.modpkg"));
+        ensure_parent(&output_path)?;
         tracing::info!("Repacking modpkg...");
 
         let mut builder = ModpkgBuilder::default();
@@ -1752,7 +1815,10 @@ fn process_fantome_file(
     // === FANTOME REPACK ===
     // Rebuild the fantome ZIP with fixed WADs replacing the originals
     if !dry_run && total_result.fixes_applied > 0 {
-        let output_path = file.with_extension("fixed.fantome");
+        let output_path = ctx
+            .output_for(file)
+            .unwrap_or_else(|| file.with_extension("fixed.fantome"));
+        ensure_parent(&output_path)?;
 
         tracing::info!("Repacking fantome archive...");
 

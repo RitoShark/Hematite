@@ -145,6 +145,7 @@ fn detect_only_reports_fixes_and_writes_nothing() {
         game_wad: None,
         live: None,
         in_place: false,
+        output: None,
     };
 
     let result = fix_folder(
@@ -225,6 +226,7 @@ fn in_place_run_writes_to_source_no_fixed_copy() {
         game_wad: None,
         live: None,
         in_place: true,
+        output: None,
     };
 
     let result = fix_folder(

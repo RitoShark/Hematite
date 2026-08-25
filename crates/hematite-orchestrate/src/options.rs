@@ -43,4 +43,7 @@ pub struct FixOptions<'a> {
     /// that fix a project in place; the CLI leaves this `false` so it keeps
     /// producing the non-destructive `.fixed` copy.
     pub in_place: bool,
+    /// Explicit destination for the fixed folder. `None` keeps the default
+    /// sibling `<folder>.fixed.wad.client`.
+    pub output: Option<&'a Path>,
 }

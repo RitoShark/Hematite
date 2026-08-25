@@ -733,7 +733,9 @@ pub fn fix_folder(
         let output_path = if opts.in_place {
             folder.to_path_buf()
         } else {
-            fixed_wad_output_path(folder)
+            opts.output
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| fixed_wad_output_path(folder))
         };
         std::fs::create_dir_all(&output_path).context("Failed to create output WAD folder")?;
 
