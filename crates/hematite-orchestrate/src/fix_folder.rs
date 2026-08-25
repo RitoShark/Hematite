@@ -83,6 +83,8 @@ pub fn fix_folder(
         }
     }
 
+    resolve_hex_chunk_names(&mut all_files, &bin_provider);
+
     // Original on-disk relative paths, snapshotted before any rename/convert —
     // used by the in-place writer to delete files that were renamed away or
     // removed (so `.dds` originals don't linger next to their new `.tex`).
@@ -795,6 +797,74 @@ pub fn fix_folder(
     }
 
     Ok(total_result)
+}
+
+/// Name chunks the hash dictionary couldn't, using the paths the mod's OWN
+/// BINs spell out. A chunk whose 16-hex-digit name hashes to a path some BIN
+/// references is renamed to that path — the hash is unchanged (the path IS
+/// its preimage), but every path-driven rule can finally see it: a
+/// hex-named `.dds` is invisible to the DDS→TEX converter.
+///
+/// Mirrors Quartz's `bin/hash_extract.rs`, including its two derived forms:
+/// League ships `2x_`/`4x_` variants of HUD icons that nothing references by
+/// name, and `.py` siblings of `.bin` paths.
+///
+/// Returns the number of chunks named.
+pub fn resolve_hex_chunk_names(
+    all_files: &mut [(u64, String, Vec<u8>)],
+    bin_provider: &FileBinProvider,
+) -> u32 {
+    let has_hex = all_files
+        .iter()
+        .any(|(_, p, _)| hematite_file::wad_folder::hex_chunk_hash(p).is_some());
+    if !has_hex {
+        return 0;
+    }
+
+    let mut table: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+    let mut add = |path: String| {
+        table.entry(wad_path_hash(&path)).or_insert(path);
+    };
+    for (_, path, bytes) in all_files.iter() {
+        let is_bin = path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes);
+        if !is_bin {
+            continue;
+        }
+        let Ok(tree) = bin_provider.parse_bytes(bytes) else {
+            continue;
+        };
+        for p in repath_core::collect_bin_asset_paths(&tree, false) {
+            if let Some(stem) = p.strip_suffix(".dds") {
+                let slash = p.rfind('/').map(|i| i + 1).unwrap_or(0);
+                add(format!("{}2x_{}", &p[..slash], &p[slash..]));
+                add(format!("{}4x_{}", &p[..slash], &p[slash..]));
+                let _ = stem;
+            }
+            if let Some(stem) = p.strip_suffix(".bin") {
+                add(format!("{stem}.py"));
+            }
+            add(p);
+        }
+        for link in &tree.linked {
+            add(link.to_lowercase().replace(char::from(92u8), "/"));
+        }
+    }
+
+    let mut named = 0;
+    for (hash, path, _) in all_files.iter_mut() {
+        if hematite_file::wad_folder::hex_chunk_hash(path).is_none() {
+            continue;
+        }
+        if let Some(real) = table.get(hash) {
+            tracing::debug!("Named chunk from the mod's BINs: {} -> {}", path, real);
+            *path = real.clone();
+            named += 1;
+        }
+    }
+    if named > 0 {
+        tracing::info!("Named {named} un-hashed chunk(s) from the mod's own BIN paths");
+    }
+    named
 }
 
 /// Everything the mod's BINs reference, for `remove_file` rules with

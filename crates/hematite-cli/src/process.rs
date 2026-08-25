@@ -606,6 +606,10 @@ fn process_wad_file(
     // Run file-level fixes (BNK removal, format conversions, etc.)
     ctx.ui.stage("Detecting WAD-level issues…");
     tracing::debug!("Running WAD-level pipeline...");
+    // Name what the dictionary couldn't, from the mod's own BIN paths, before
+    // anything path-driven runs.
+    hematite_orchestrate::fix_folder::resolve_hex_chunk_names(&mut all_files, &bin_provider);
+
     let referenced =
         hematite_orchestrate::fix_folder::collect_referenced_assets(&all_files, &bin_provider);
     let wad_output = wad_pipeline::apply_wad_fixes(
