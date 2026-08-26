@@ -24,9 +24,9 @@ pub struct BinTree {
     /// table). Preserved verbatim through parse → write.
     pub trailing: Vec<u8>,
     /// xxh64 `file` hash → original path pairs produced by transforms that
-    /// retype path strings into hashes. Merged into the trailer side table by
-    /// the write adapter so the readable paths are never lost.
-    pub trailer_files: std::collections::BTreeMap<u64, String>,
+    /// retype path strings into hashes. Merged into the bin's `ritobinmap`
+    /// record by the write adapter so the readable paths are never lost.
+    pub recorded_files: std::collections::BTreeMap<u64, String>,
 }
 
 /// A single object in a BIN tree.

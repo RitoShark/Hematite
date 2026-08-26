@@ -34,7 +34,7 @@ pub fn apply_to_tree(tree: &mut BinTree, targets: &[ClassFieldTarget]) -> u32 {
     let resolved = resolve_targets(targets);
     let BinTree {
         objects,
-        trailer_files,
+        recorded_files,
         ..
     } = tree;
 
@@ -42,9 +42,9 @@ pub fn apply_to_tree(tree: &mut BinTree, targets: &[ClassFieldTarget]) -> u32 {
     for obj in objects.values_mut() {
         for prop in obj.properties.values_mut() {
             if resolved.contains(&(obj.class_hash.0, prop.name_hash.0)) {
-                changes += convert_in_place(&mut prop.value, trailer_files);
+                changes += convert_in_place(&mut prop.value, recorded_files);
             }
-            changes += recurse_apply(&mut prop.value, &resolved, trailer_files);
+            changes += recurse_apply(&mut prop.value, &resolved, recorded_files);
         }
     }
     changes
@@ -221,7 +221,7 @@ mod tests {
             other => panic!("expected WadHash, got {other:?}"),
         }
         assert_eq!(
-            tree.trailer_files
+            tree.recorded_files
                 .get(&0xb7a434886d1ce5e6)
                 .map(String::as_str),
             Some(path)
@@ -278,7 +278,7 @@ mod tests {
         ];
         assert!(detect(&tree, &targets));
         assert_eq!(apply_to_tree(&mut tree, &targets), 2);
-        assert_eq!(tree.trailer_files.len(), 2);
+        assert_eq!(tree.recorded_files.len(), 2);
         assert!(!detect(&tree, &targets));
 
         let obj = tree.objects.get(&1).unwrap();

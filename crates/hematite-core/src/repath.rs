@@ -492,7 +492,7 @@ pub fn collect_bin_asset_hashes(tree: &BinTree) -> Vec<u64> {
 /// Rewrite xxh64 `file` references (`PropertyValue::WadHash`) after WAD
 /// entries were renamed. `renames` maps `old_entry_hash` →
 /// `(new_entry_hash, new_path)`; every matching hash in the tree is replaced
-/// and the new pair is recorded in `tree.trailer_files` so the path survives
+/// and the new pair is recorded in `tree.recorded_files` so the path survives
 /// in the CELMAP trailer. This is what keeps hand-migrated mods (whose BINs
 /// already carry `file` hashes instead of strings) working through repath —
 /// string rewriting never sees them, but the chunks still move.
@@ -536,7 +536,7 @@ pub fn rewrite_bin_file_hashes(tree: &mut BinTree, renames: &HashMap<u64, (u64, 
     }
     let count = hits.len() as u32;
     for (h, p) in hits {
-        tree.trailer_files.insert(h, p);
+        tree.recorded_files.insert(h, p);
     }
     count
 }
@@ -1016,14 +1016,14 @@ mod tests {
             other => panic!("expected Container, got {other:?}"),
         }
         assert_eq!(
-            tree.trailer_files.get(&0xAAAA).map(String::as_str),
+            tree.recorded_files.get(&0xAAAA).map(String::as_str),
             Some("assets/hematite/a.anm")
         );
         assert_eq!(
-            tree.trailer_files.get(&0xBBBB).map(String::as_str),
+            tree.recorded_files.get(&0xBBBB).map(String::as_str),
             Some("assets/hematite/b.tex")
         );
-        assert!(!tree.trailer_files.contains_key(&untouched));
+        assert!(!tree.recorded_files.contains_key(&untouched));
 
         assert_eq!(rewrite_bin_file_hashes(&mut tree, &renames), 0);
     }
