@@ -45,6 +45,18 @@ fn flat_hash_name(hash: u64, rel: &str) -> String {
     }
 }
 
+/// The relative path a chunk actually gets on disk under `dir`: its real path,
+/// or its flat hash name when the real one is too long for the filesystem.
+pub fn disk_rel_path(dir: &Path, hash: u64, path: &str) -> String {
+    let rel = path.replace('\\', "/");
+    if rel.len() > MAX_REL_LEN || dir.join(&rel).to_string_lossy().len() > MAX_FULL_LEN {
+        let flat = flat_hash_name(hash, &rel);
+        tracing::debug!("Path too long for disk, writing as {}: {}", flat, rel);
+        return flat;
+    }
+    rel
+}
+
 /// Write an extracted file list into `dir` as a WAD folder, skipping removed
 /// paths. Any existing file or directory at `dir` is replaced.
 ///
@@ -71,16 +83,11 @@ pub fn write_wad_folder(
             tracing::debug!("Excluding removed file: {}", path);
             continue;
         }
-        let mut rel = path.replace('\\', "/");
+        let rel = path.replace('\\', "/");
         if rel.split('/').any(|c| c == "..") || Path::new(&rel).is_absolute() {
             anyhow::bail!("Refusing to write chunk outside the WAD folder: {rel}");
         }
-        if rel.len() > MAX_REL_LEN || dir.join(&rel).to_string_lossy().len() > MAX_FULL_LEN {
-            let flat = flat_hash_name(*hash, &rel);
-            tracing::debug!("Path too long for disk, writing as {}: {}", flat, rel);
-            rel = flat;
-        }
-        let dest = dir.join(&rel);
+        let dest = dir.join(disk_rel_path(dir, *hash, &rel));
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .context("Failed to create parent directory in WAD folder")?;
@@ -161,6 +168,20 @@ mod tests {
         assert!(flat.is_file(), "overlong path must land under its hash");
         // And reading it back restores the original chunk hash.
         assert_eq!(hex_chunk_hash("abcdef0123456789.bin"), Some(hash));
+    }
+
+    #[test]
+    fn disk_rel_path_keeps_short_names_and_flattens_long_ones() {
+        let dir = Path::new("C:/out/Yasuo.wad.client");
+        assert_eq!(
+            disk_rel_path(dir, 1, "data\\characters\\yasuo\\skins\\skin0.bin"),
+            "data/characters/yasuo/skins/skin0.bin"
+        );
+        let combo = format!("data/yasuo_{}.bin", "skins_skin1_".repeat(60));
+        assert_eq!(
+            disk_rel_path(dir, 0xabcdef0123456789, &combo),
+            "abcdef0123456789.bin"
+        );
     }
 
     #[test]

@@ -752,9 +752,13 @@ pub fn fix_folder(
         );
 
         let mut files_written = 0;
-        for (_, path, bytes) in &all_files {
+        for (hash, path, bytes) in &all_files {
             if !shared_files_to_remove.contains(path) {
-                let dest_file_path = output_path.join(path);
+                let dest_file_path = output_path.join(hematite_file::wad_folder::disk_rel_path(
+                    &output_path,
+                    *hash,
+                    path,
+                ));
                 if let Some(parent) = dest_file_path.parent() {
                     std::fs::create_dir_all(parent)
                         .context("Failed to create parent directory for file in WAD folder")?;
