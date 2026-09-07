@@ -85,6 +85,16 @@ pub fn fix_folder(
 
     resolve_hex_chunk_names(&mut all_files, &bin_provider);
 
+    let mut repath_report = hematite_core::repath_check::check_repath(
+        &all_files,
+        &bin_provider,
+        hash_provider.as_ref(),
+        champions,
+    );
+    repath_report.source = folder.to_string_lossy().into_owned();
+    progress.note(&repath_report.summary());
+    let repath_opts = repath_opts.filter(|_| repath_report.skip_reason.is_none());
+
     // Original on-disk relative paths, snapshotted before any rename/convert —
     // used by the in-place writer to delete files that were renamed away or
     // removed (so `.dds` originals don't linger next to their new `.tex`).
@@ -504,7 +514,11 @@ pub fn fix_folder(
     }
 
     // === REPATH PIPELINE ===
-    if let Some(opts) = repath_opts {
+    let has_remaining_bin = all_files.iter().any(|(_, path, bytes)| {
+        (path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes))
+            && bin_provider.parse_bytes(bytes).is_ok()
+    });
+    if let Some(opts) = repath_opts.filter(|_| has_remaining_bin) {
         if !dry_run {
             ui.stage(&format!("Repathing assets (prefix “{}”)…", opts.prefix));
 
@@ -707,7 +721,7 @@ pub fn fix_folder(
             .collect();
 
         let skin_number = skin_info.primary_skin();
-        let is_binless = skin_info.is_binless;
+        let is_binless = repath_report.bins_scanned == 0 && repath_report.bins_failed == 0;
         let champion = if skin_info.champion.is_empty() {
             None
         } else {
@@ -721,6 +735,8 @@ pub fn fix_folder(
             detected_issues: detected,
         });
     }
+
+    total_result.repath_reports.push(repath_report);
 
     // === WAD FOLDER WRITING ===
     if !dry_run && (total_result.fixes_applied > 0 || !shared_files_to_remove.is_empty()) {

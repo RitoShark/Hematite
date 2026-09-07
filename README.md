@@ -158,7 +158,7 @@ Full architecture, transform framework, contribution flow → **[DEVELOPER.md](D
 <td>
 
 ### Deep repair
-- **Seed-BIN backfill** — asset-only mods (loose textures/meshes, no character BIN) now get their canonical `skin{N}.bin` pulled from the base game as a foundation
+- **BIN-less guard** — asset-only mods keep their paths; repath never pulls a seed BIN into an input that contains no BIN
 - **Transitive dependency closure** — `--game-wad` now follows the *full* dependency chain (referenced assets **and** `.linked` BINs), recursing until the mod is self-contained
 
 </td>
@@ -207,7 +207,7 @@ hematite-cli "MyAwesomeSkin.fantome"
 | `--dry-run` | Show what *would* be fixed |
 | `--json` | Emit machine-readable output (skips the "press enter" pause) |
 | `--repath` | Rename mod assets with a unique prefix so they can't collide with the base game |
-| `--game-wad <PATH>` | **Deep repair** from a specific base-game champion WAD (optional — with a detected install, deep repair runs automatically when `--repath` is set). Backfills the canonical `skin{N}.bin` for asset-only mods, then transitively resolves every referenced + linked file until the dependency chain is closed |
+| `--game-wad <PATH>` | **Deep repair** from a specific base-game champion WAD (optional — with a detected install, deep repair runs automatically when `--repath` is set). Requires a BIN in the original input, then transitively resolves referenced and linked files |
 | `--game-path <DIR>` | Point at a League install explicitly (otherwise auto-detected) |
 | `--no-live` | Disable all live-game features for this run |
 | `--restore-anm` | Pull missing `.anm` animations from the game instead of removing them |
@@ -275,7 +275,7 @@ Mods that ship subchampions (Jinx + jinxmine, Annie + Tibbers, Anivia + egg) use
 
 ## Configure without recompiling
 
-Every fix rule lives in **[config/fix_config.json](config/fix_config.json)**. Add a rule, push to `main`, the next CLI run picks it up (cached for 1 hour, embedded fallback when offline).
+Every fix rule lives in **[config/fix_config.toml](config/fix_config.toml)**. Add a rule, push to `main`, the next CLI run picks it up (cached for 1 hour, embedded fallback when offline).
 
 A rule has three parts:
 
@@ -313,3 +313,5 @@ Hematite is the primary ore of iron. When iron oxidizes, it becomes *rust*. This
 <p align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=0:c1272d,50:721121,100:1a1a2e&height=120&section=footer&animation=fadeIn" alt="footer" />
 </p>
+
+See [repath reports, configuration behavior, and the LTK comparison](docs/repath-and-ltk-review.md) for the current checks and remaining repair gaps.

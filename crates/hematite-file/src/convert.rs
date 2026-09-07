@@ -11,6 +11,11 @@ use rs_bin::{Bin as RsBin, BinEntry, BinType, BinValue};
 /// Convert an rs_bin `Bin` to a Hematite `BinTree` (after parsing).
 pub fn rs_bin_tree_to_hematite(rs_bin: RsBin) -> Result<BinTree> {
     let mut objects = IndexMap::new();
+    let recorded_files = rs_bin::read_path_map(&rs_bin)
+        .game
+        .into_iter()
+        .map(|path| (crate::wad_adapter::wad_path_hash(&path), path))
+        .collect();
 
     for entry in rs_bin.entries {
         let obj = entry_to_hematite(entry)?;
@@ -21,7 +26,7 @@ pub fn rs_bin_tree_to_hematite(rs_bin: RsBin) -> Result<BinTree> {
         objects,
         linked: rs_bin.linked,
         trailing: rs_bin.trailing,
-        recorded_files: Default::default(),
+        recorded_files,
     })
 }
 

@@ -284,6 +284,13 @@ pub fn resolve_from_source(
 ) -> Result<DeepRepairStats> {
     let mut stats = DeepRepairStats::default();
 
+    if !all_files.iter().any(|(_, path, bytes)| {
+        (path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes))
+            && bin_provider.parse_bytes(bytes).is_ok()
+    }) {
+        return Ok(stats);
+    }
+
     // `seen` tracks every path we've already *attempted* to pull (success or
     // not) plus every path the mod already ships, so the closure terminates.
     let mut seen: HashSet<String> = HashSet::new();

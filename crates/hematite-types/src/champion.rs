@@ -30,6 +30,7 @@ pub struct ChampionList {
 /// (keys stored lowercase).
 #[derive(Debug, Clone, Default)]
 pub struct CharacterRelations {
+    pub champions: std::collections::HashSet<String>,
     /// champion (lowercase) → list of subchamps
     pub champion_to_subchamps: HashMap<String, Vec<String>>,
     /// subchamp (lowercase) → primary champion
@@ -45,7 +46,10 @@ pub struct CharacterRelations {
 impl CharacterRelations {
     /// Build from a raw champion list, pre-computing reverse maps.
     pub fn from_champion_list(list: &ChampionList) -> Self {
-        let mut relations = Self::default();
+        let mut relations = Self {
+            champions: list.champions.iter().map(|c| c.to_lowercase()).collect(),
+            ..Default::default()
+        };
 
         for (champion, subchamps) in &list.subchamps {
             let champion_lower = champion.to_lowercase();
@@ -76,6 +80,12 @@ impl CharacterRelations {
         }
 
         relations
+    }
+
+    pub fn is_riot_character(&self, name: &str) -> bool {
+        let name = name.to_lowercase();
+        self.subchamp_to_champion.contains_key(&name)
+            || self.champions.iter().any(|champ| name.starts_with(champ))
     }
 
     /// Get related subchamps for a champion (case-insensitive).

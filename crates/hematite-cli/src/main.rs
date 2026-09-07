@@ -213,9 +213,8 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
 
     let start_time = Instant::now();
 
-    let mut selected_fixes = args::collect_selected_fixes(&cli);
-
     let config = remote::load_fix_config();
+    let mut selected_fixes = args::collect_selected_fixes(&cli, &config);
     let champion_list = remote::load_champion_list();
     let champions = CharacterRelations::from_champion_list(&champion_list);
 
@@ -272,21 +271,16 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
 
     let dry_run = cli.dry_run || cli.check;
 
-    // Build repath options.
-    // Priority: CLI flags > fix_config.json repath section.
-    // --repath flag or config.repath.enabled activates repathing.
     let repath_opts: Option<RepathOptions> = {
         let cfg = &config.repath;
         let active = !cli.no_repath && (cli.repath || cfg.enabled);
         if active {
-            // Prefix priority: explicit CLI > config (when non-placeholder)
-            // > Topaz-derived from filename.
             let prefix = cli
                 .repath_prefix
                 .clone()
                 .or_else(|| {
                     let p = &cfg.prefix;
-                    if p.is_empty() || p == "bum" || p == "hematite" {
+                    if p.is_empty() {
                         None
                     } else {
                         Some(p.clone())
@@ -294,7 +288,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
                 })
                 .unwrap_or_else(|| derive_prefix_from_input(input));
             let mut opts = RepathOptions::new(prefix);
-            opts.layout = cli.repath_layout.into();
+            opts.layout = cli.repath_layout.map(Into::into).unwrap_or(cfg.layout);
             opts.invis_texture = cli.invis_texture || cfg.invis_texture;
             opts.skip_vo = cfg.skip_vo;
             opts.game_wad = cli.game_wad.clone();
@@ -305,11 +299,6 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         }
     };
 
-    // `combo_bin_relocate` has no BIN-level detect/apply of its own (its
-    // config entry in `wad_fixes` is a descriptor only, see fix_config.json)
-    // — the actual relocation is this dedicated pipeline step, gated the
-    // same way `selected_fixes` reaches it: via `--relocate-bins`, `--all`,
-    // or no-flags default (both populate it through `ALL_FIX_IDS`).
     let relocate_combo_bins = selected_fixes.iter().any(|f| f == "combo_bin_relocate");
 
     let result = process::process_input(
@@ -347,7 +336,7 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
         // through `cli.repath_layout` above; suppress a defensive warning
         // some toolchains emit when a value-enum is only used to be
         // converted away.
-        let _: RepathLayoutArg = cli.repath_layout;
+        let _: Option<RepathLayoutArg> = cli.repath_layout;
         Ok(())
     } else {
         anyhow::bail!("Processing completed with {} error(s)", result.errors.len());
@@ -407,7 +396,9 @@ fn derive_prefix_from_input(input: &std::path::Path) -> String {
 
 fn output_check_json(result: &hematite_types::result::ProcessResult) -> Result<()> {
     if let Some(check_info) = &result.check_info {
-        let json = serde_json::to_string_pretty(check_info)?;
+        let mut value = serde_json::to_value(check_info)?;
+        value["repath_reports"] = serde_json::to_value(&result.repath_reports)?;
+        let json = serde_json::to_string_pretty(&value)?;
         println!("{}", json);
     } else {
         println!("{{}}");
@@ -424,6 +415,7 @@ fn output_json(result: &hematite_types::result::ProcessResult, duration: f64) ->
         fixes_failed: u32,
         errors: Vec<String>,
         duration_seconds: f64,
+        repath_reports: Vec<hematite_types::repath::RepathReport>,
     }
 
     let output = JsonOutput {
@@ -433,6 +425,7 @@ fn output_json(result: &hematite_types::result::ProcessResult, duration: f64) ->
         fixes_failed: result.fixes_failed,
         errors: result.errors.clone(),
         duration_seconds: duration,
+        repath_reports: result.repath_reports.clone(),
     };
 
     let json = serde_json::to_string_pretty(&output)?;

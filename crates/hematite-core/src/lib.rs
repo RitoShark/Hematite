@@ -30,6 +30,7 @@ pub mod fallback;
 pub mod filter;
 pub mod pipeline;
 pub mod repath;
+pub mod repath_check;
 pub mod seeds;
 pub mod skinlite;
 pub mod strings;

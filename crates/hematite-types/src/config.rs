@@ -33,6 +33,56 @@ pub struct FixConfig {
 }
 
 impl FixConfig {
+    pub fn default_fix_ids(&self) -> Vec<String> {
+        if let Some(ids) = &self.enabled_fixes {
+            let mut seen = std::collections::HashSet::new();
+            return ids
+                .iter()
+                .filter(|id| seen.insert((*id).clone()))
+                .cloned()
+                .collect();
+        }
+        let mut ids: Vec<_> = self
+            .fixes
+            .keys()
+            .chain(self.wad_fixes.keys())
+            .filter(|id| self.is_fix_enabled(id))
+            .cloned()
+            .collect();
+        let legacy_order = [
+            "healthbar_fix",
+            "staticmat_texturepath",
+            "staticmat_samplername",
+            "black_icons",
+            "dds_to_tex",
+            "resolve_dead_refs",
+            "champion_bin_remover",
+            "combo_bin_relocate",
+            "bnk_remover",
+            "anm_remover",
+            "dds_texture_converter",
+            "sco_mesh_converter",
+            "fix_tex_dimensions",
+            "vfx_shape_fix",
+            "shader_fallback",
+            "gear_pull",
+            "cac_pull",
+            "entry_validator",
+            "file_ref_migration",
+        ];
+        ids.sort_by(|a, b| {
+            let rank = |id: &str| {
+                legacy_order
+                    .iter()
+                    .position(|known| *known == id)
+                    .unwrap_or(usize::MAX)
+            };
+            rank(a).cmp(&rank(b)).then_with(|| a.cmp(b))
+        });
+        ids.dedup();
+        ids
+    }
+
     /// Whether the fix with this ID is enabled — the single authority every
     /// pipeline must consult (see `enabled_fixes`).
     pub fn is_fix_enabled(&self, id: &str) -> bool {
@@ -54,6 +104,8 @@ impl FixConfig {
 /// precedence over these values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepathConfig {
+    #[serde(default)]
+    pub layout: crate::repath::RepathLayout,
     /// Run repathing automatically even without `--repath` flag.
     /// Set to `true` to make drag-and-drop repath by default.
     #[serde(default)]
@@ -90,6 +142,7 @@ fn default_true() -> bool {
 impl Default for RepathConfig {
     fn default() -> Self {
         Self {
+            layout: Default::default(),
             enabled: false,
             prefix: default_repath_prefix(),
             invis_texture: false,

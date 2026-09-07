@@ -156,7 +156,7 @@ pub struct Cli {
     #[arg(
         long,
         value_name = "PREFIX",
-        help = "Custom repath prefix. If omitted, derived Topaz-style from the input \
+        help = "Custom repath prefix. Overrides config; an empty configured prefix derives from the input \
                 filename + skin number (e.g. .yone1_). With the default in-folder layout \
                 the prefix is concatenated to the next path segment, so \
                 \".yone1_\" turns assets/characters/yone/... into \
@@ -167,11 +167,10 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
-        default_value = "in-folder",
         help = "Repath layout. 'in-folder' = Topaz-style (concat to next segment, ROOT \
                 upper-cased). 'nested' = LtMAO-style (prefix as its own folder)."
     )]
-    pub repath_layout: RepathLayoutArg,
+    pub repath_layout: Option<RepathLayoutArg>,
 
     #[arg(
         long,
@@ -270,49 +269,14 @@ impl From<RepathLayoutArg> for hematite_types::repath::RepathLayout {
     }
 }
 
-/// All known fix IDs in application order.
-///
-/// Every ID here MUST have a rule in `config/fix_config.json` (`fixes` or
-/// `wad_fixes`) — `apply_fixes` records an error for any selected BIN-level
-/// ID absent from both maps, and main.rs bails on any error. Guarded by
-/// `all_fix_ids_exist_in_repo_config` below.
-///
-/// `apply_fixes` (see `hematite-core/src/pipeline.rs`) walks
-/// `selected_fix_ids` in the order given here, not config declaration order
-/// — so relative position in this list is load-bearing, not cosmetic.
-/// `gear_pull` and `cac_pull` pull missing entries out of the live game's
-/// BIN closure; they must run BEFORE `entry_validator`, which deletes
-/// unreferenced entries of the same types. Running entry_validator first
-/// would strip the very links gear_pull/cac_pull need to resolve, so they
-/// sit immediately before it despite `entry_validator` being declared
-/// earlier in `fix_config.json`.
-const ALL_FIX_IDS: &[&str] = &[
-    "healthbar_fix",
-    "staticmat_texturepath",
-    "staticmat_samplername",
-    "black_icons",
-    "dds_to_tex",
-    "resolve_dead_refs",
-    "champion_bin_remover",
-    "combo_bin_relocate",
-    "bnk_remover",
-    "anm_remover",
-    "dds_texture_converter",
-    "sco_mesh_converter",
-    "fix_tex_dimensions",
-    "vfx_shape_fix",
-    "shader_fallback",
-    "gear_pull",
-    "cac_pull",
-    "entry_validator",
-    "file_ref_migration",
-];
-
 /// Collect selected fix IDs based on CLI flags.
 ///
 /// If `--all` is set or no flags are passed, returns all fix IDs.
 /// Otherwise, returns only the specifically selected fixes.
-pub fn collect_selected_fixes(cli: &Cli) -> Vec<String> {
+pub fn collect_selected_fixes(
+    cli: &Cli,
+    config: &hematite_types::config::FixConfig,
+) -> Vec<String> {
     let mut fixes = Vec::new();
     if cli.healthbar {
         fixes.push("healthbar_fix".into());
@@ -372,7 +336,7 @@ pub fn collect_selected_fixes(cli: &Cli) -> Vec<String> {
 
     // If --all or no specific flags: apply all fixes
     if cli.all || fixes.is_empty() {
-        return ALL_FIX_IDS.iter().map(|s| (*s).into()).collect();
+        return config.default_fix_ids();
     }
 
     fixes
@@ -380,14 +344,114 @@ pub fn collect_selected_fixes(cli: &Cli) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ALL_FIX_IDS;
+    use super::*;
 
-    /// Regression guard: every ID in ALL_FIX_IDS must have a rule in the
-    /// repo's fix config (`fixes` ∪ `wad_fixes`). An ID selected by default
-    /// (`--all` / no flags) but missing from the config makes `apply_fixes`
-    /// push "Fix rule not found" into result.errors, and main.rs bails on
-    /// any error — i.e. every default invocation hard-fails. Never let
-    /// ALL_FIX_IDS drift ahead of the config again.
+    #[test]
+    fn defaults_follow_config_order_and_include_new_rules() {
+        use clap::Parser;
+        let mut config = load_repo_config();
+        let rule = config.fixes["healthbar_fix"].clone();
+        config.fixes.insert("new_remote_rule".into(), rule);
+        config.enabled_fixes = Some(vec!["new_remote_rule".into(), "healthbar_fix".into()]);
+        let cli = Cli::parse_from(["hematite", "test.bin"]);
+        assert_eq!(
+            collect_selected_fixes(&cli, &config),
+            vec!["new_remote_rule", "healthbar_fix"]
+        );
+        let cli = Cli::parse_from(["hematite", "test.bin", "--healthbar"]);
+        assert_eq!(collect_selected_fixes(&cli, &config), vec!["healthbar_fix"]);
+    }
+
+    #[test]
+    fn config_runs_pulls_before_entry_validation() {
+        let ids = load_repo_config().default_fix_ids();
+        let position = |id: &str| ids.iter().position(|s| s == id).unwrap();
+        assert!(position("gear_pull") < position("entry_validator"));
+        assert!(position("cac_pull") < position("entry_validator"));
+        assert!(ids.contains(&"merge_linked_bins".to_string()));
+    }
+
+    #[test]
+    fn migration_table_covers_supported_shapes_and_keeps_other_fields() {
+        use hematite_core::strings::fnv1a_hash;
+        use hematite_types::bin::{BinObject, BinProperty, BinTree, PropertyValue};
+        use hematite_types::config::{DetectionRule, TransformAction};
+        use hematite_types::hash::{FieldHash, PathHash, TypeHash};
+        let config = load_repo_config();
+        let rule = &config.fixes["file_ref_migration"];
+        let DetectionRule::ClassFieldIsString { targets: detection } = &rule.detect else {
+            panic!()
+        };
+        let TransformAction::RetypeStringToFile { targets } = &rule.apply else {
+            panic!()
+        };
+        assert_eq!(targets.len(), 385);
+        assert_eq!(
+            serde_json::to_value(detection).unwrap(),
+            serde_json::to_value(targets).unwrap()
+        );
+        let mut tree = BinTree::default();
+        for (id, class, field, value) in [
+            (
+                1,
+                "SkinCharacterDataProperties",
+                "iconAvatar",
+                PropertyValue::String("assets/icon.tex".into()),
+            ),
+            (
+                2,
+                "SkinCharacterDataProperties",
+                "alternateIconsCircle",
+                PropertyValue::Container(vec![PropertyValue::String("assets/icon.tex".into())]),
+            ),
+            (
+                3,
+                "CensoredImage",
+                "UncensoredImages",
+                PropertyValue::Map(vec![(
+                    PropertyValue::Hash(12),
+                    PropertyValue::String("assets/icon.tex".into()),
+                )]),
+            ),
+            (
+                4,
+                "VfxEmitterDefinitionData",
+                "texture",
+                PropertyValue::String("assets/particle.tex".into()),
+            ),
+        ] {
+            let hash = fnv1a_hash(field);
+            tree.objects.insert(
+                id,
+                BinObject {
+                    path_hash: PathHash(id),
+                    class_hash: TypeHash(fnv1a_hash(class)),
+                    properties: [(
+                        hash,
+                        BinProperty {
+                            name_hash: FieldHash(hash),
+                            value,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                },
+            );
+        }
+        assert_eq!(
+            hematite_core::transform::retype_file::apply_to_tree(&mut tree, targets),
+            3
+        );
+        assert!(matches!(
+            tree.objects[&4].properties[&fnv1a_hash("texture")].value,
+            PropertyValue::String(_)
+        ));
+        assert_eq!(
+            hematite_core::transform::retype_file::apply_to_tree(&mut tree, targets),
+            0
+        );
+    }
+
     fn load_repo_config() -> hematite_types::config::FixConfig {
         let config_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/fix_config.toml");
@@ -395,23 +459,6 @@ mod tests {
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", config_path.display()));
         toml::from_str(&raw)
             .unwrap_or_else(|e| panic!("cannot parse {}: {e}", config_path.display()))
-    }
-
-    #[test]
-    fn all_fix_ids_exist_in_repo_config() {
-        let config = load_repo_config();
-
-        let missing: Vec<&&str> = ALL_FIX_IDS
-            .iter()
-            .filter(|id| !config.fixes.contains_key(**id) && !config.wad_fixes.contains_key(**id))
-            .collect();
-
-        assert!(
-            missing.is_empty(),
-            "ALL_FIX_IDS entries missing from config/fix_config.json \
-             (fixes ∪ wad_fixes): {missing:?} — add the config rule first, \
-             then list the ID here"
-        );
     }
 
     /// Round-trip the repo's fix config and assert the new v2.2.0 rules
@@ -429,7 +476,7 @@ mod tests {
 
         let config = load_repo_config();
 
-        assert_eq!(config.version, "2.3.4");
+        assert_eq!(config.version, "2.3.5");
 
         // The central enable list is the single authority — spot-check both
         // directions plus a WAD-level entry.

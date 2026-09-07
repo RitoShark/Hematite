@@ -23,6 +23,204 @@ use indexmap::IndexMap;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+fn reference_bin(values: Vec<hematite_types::bin::PropertyValue>) -> Vec<u8> {
+    use hematite_types::bin::{BinObject, BinProperty, BinTree};
+    let properties = values
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            (
+                i as u32,
+                BinProperty {
+                    name_hash: FieldHash(i as u32),
+                    value,
+                },
+            )
+        })
+        .collect();
+    let objects = [(
+        1,
+        BinObject {
+            path_hash: PathHash(1),
+            class_hash: TypeHash(2),
+            properties,
+        },
+    )]
+    .into_iter()
+    .collect();
+    FileBinProvider
+        .write_bytes(&BinTree {
+            objects,
+            ..Default::default()
+        })
+        .unwrap()
+}
+
+#[test]
+fn binless_and_unreadable_inputs_never_repath_or_pull_a_seed() {
+    use hematite_types::repath::RepathOptions;
+    for malformed in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("Test.wad.client");
+        let asset = folder.join("assets/characters/azir/skins/skin0/model.skn");
+        std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        std::fs::write(&asset, [1, 2, 3]).unwrap();
+        if malformed {
+            std::fs::write(folder.join("broken.bin"), b"PROPbroken").unwrap();
+        }
+        let before = snapshot(&folder);
+        let config: FixConfig =
+            toml::from_str(include_str!("../../../config/fix_config.toml")).unwrap();
+        let mut repath = RepathOptions::new("test");
+        repath.game_wad = Some(tmp.path().join("must-not-be-opened.wad.client"));
+        let hashes: Arc<dyn HashProvider> = Arc::new(StubHashes);
+        let opts = FixOptions {
+            dry_run: false,
+            detect_only: false,
+            repath: Some(&repath),
+            restore_anm: false,
+            relocate_combo_bins: false,
+            game_wad: None,
+            live: None,
+            in_place: true,
+            output: None,
+        };
+        let result = fix_folder(
+            &folder,
+            &config,
+            &[],
+            &CharacterRelations::default(),
+            &hashes,
+            &opts,
+            &NoopSink,
+        )
+        .unwrap();
+        assert_eq!(snapshot(&folder), before);
+        assert_eq!(result.fixes_applied, 0);
+        assert_eq!(result.repath_reports.len(), 1);
+        let report = &result.repath_reports[0];
+        assert_eq!(report.bins_scanned, 0);
+        assert_eq!(report.bins_failed, u32::from(malformed));
+        assert!(!report.needs_repath);
+        assert!(report.skip_reason.is_some());
+    }
+}
+
+#[test]
+fn check_counts_string_and_hash_refs_and_repath_is_idempotent() {
+    use hematite_file::wad_adapter::wad_path_hash;
+    use hematite_types::bin::PropertyValue;
+    use hematite_types::repath::{RepathLayout, RepathOptions, RepathStatus};
+    let tmp = tempfile::tempdir().unwrap();
+    let folder = tmp.path().join("Test.wad.client");
+    let asset = "assets/characters/azir/skins/skin0/model.skn";
+    let asset_disk = folder.join(asset);
+    std::fs::create_dir_all(asset_disk.parent().unwrap()).unwrap();
+    std::fs::write(asset_disk, [1, 2, 3]).unwrap();
+    let bytes = reference_bin(vec![
+        PropertyValue::String(asset.into()),
+        PropertyValue::WadHash(wad_path_hash(asset)),
+        PropertyValue::String("assets/characters/azir/base-game-only.tex".into()),
+        PropertyValue::String("assets/sounds/audio.bnk".into()),
+    ]);
+    std::fs::write(folder.join("0123456789abcdef"), bytes).unwrap();
+    let before = snapshot(&folder);
+    let config: FixConfig =
+        toml::from_str(include_str!("../../../config/fix_config.toml")).unwrap();
+    let mut repath = RepathOptions::new("test");
+    repath.layout = RepathLayout::Nested;
+    let hashes: Arc<dyn HashProvider> = Arc::new(StubHashes);
+    let opts = FixOptions {
+        dry_run: false,
+        detect_only: true,
+        repath: Some(&repath),
+        restore_anm: false,
+        relocate_combo_bins: false,
+        game_wad: None,
+        live: None,
+        in_place: true,
+        output: None,
+    };
+    let run = |opts: &FixOptions| {
+        fix_folder(
+            &folder,
+            &config,
+            &[],
+            &CharacterRelations::default(),
+            &hashes,
+            opts,
+            &NoopSink,
+        )
+        .unwrap()
+    };
+    let checked = run(&opts);
+    assert_eq!(snapshot(&folder), before);
+    assert!(!checked.check_info.unwrap().is_binless);
+    assert_eq!(checked.repath_reports[0].canonical, 1);
+    assert!(checked.repath_reports[0].needs_repath);
+    let opts = FixOptions {
+        detect_only: false,
+        ..opts
+    };
+    assert!(run(&opts).fixes_applied > 0);
+    let after = snapshot(&folder);
+    assert!(after.contains_key("assets/test/characters/azir/skins/skin0/model.skn"));
+    assert!(!after.contains_key(asset));
+    let second = run(&opts);
+    assert_eq!(second.fixes_applied, 0);
+    assert_eq!(second.repath_reports[0].status, RepathStatus::Repathed);
+    assert!(!second.repath_reports[0].needs_repath);
+    assert_eq!(snapshot(&folder), after);
+}
+
+#[test]
+fn checker_resolves_embedded_names_and_reports_incomplete_scans() {
+    use hematite_file::wad_adapter::wad_path_hash;
+    use hematite_types::bin::PropertyValue;
+    use hematite_types::repath::RepathStatus;
+    let asset = "assets/custom/only-in-path-map.tex";
+    let hash = wad_path_hash(asset);
+    let bytes = reference_bin(vec![PropertyValue::WadHash(hash)]);
+    let mut tree = FileBinProvider.parse_bytes(&bytes).unwrap();
+    tree.recorded_files.insert(hash, asset.into());
+    let orphan = "assets/custom/unreferenced-name.tex";
+    tree.recorded_files
+        .insert(wad_path_hash(orphan), orphan.into());
+    let files = vec![(
+        1,
+        "skin.bin".into(),
+        FileBinProvider.write_bytes(&tree).unwrap(),
+    )];
+    let check = |files: &[_]| {
+        hematite_core::repath_check::check_repath(
+            files,
+            &FileBinProvider,
+            &StubHashes,
+            &CharacterRelations::default(),
+        )
+    };
+    let report = check(&files);
+    assert_eq!(report.prefixed, 1);
+    assert_eq!(report.unresolved_hashes, 0);
+    let mut files = files;
+    files.push((
+        2,
+        "unknown.bin".into(),
+        reference_bin(vec![PropertyValue::WadHash(77)]),
+    ));
+    assert_eq!(check(&files).status, RepathStatus::Unknown);
+    assert_eq!(check(&files).unresolved_hashes, 1);
+    files.push((3, "broken.bin".into(), b"PROPbroken".to_vec()));
+    assert!(check(&files).skip_reason.is_some());
+    let mut aggregate = hematite_types::result::ProcessResult::default();
+    aggregate.repath_reports.push(report);
+    aggregate.merge(hematite_types::result::ProcessResult {
+        repath_reports: vec![check(&files)],
+        ..Default::default()
+    });
+    assert_eq!(aggregate.repath_reports.len(), 2);
+}
+
 /// Class hash carried by the synthetic BIN object; the stub provider below
 /// resolves it to `SpellObject` so `champion_bin_remover` detects it.
 const SPELL_OBJECT_CLASS_HASH: u32 = 0xDEAD_BEEF;

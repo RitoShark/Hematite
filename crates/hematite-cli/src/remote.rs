@@ -117,11 +117,6 @@ fn fetch_json(url: &str) -> Result<String> {
 pub fn load_fix_config() -> FixConfig {
     let config = load_fix_config_source();
 
-    // Never run with a config OLDER than the one this binary shipped with.
-    // The binary's fix IDs (args::ALL_FIX_IDS) are guaranteed to exist in the
-    // embedded config; a stale remote/cache (e.g. CDN lag right after a
-    // release, or a still-valid cache from before an update) would make the
-    // fix pipeline error with "Fix rule not found". Prefer embedded when newer.
     let embedded = load_embedded_fix_config();
     if version_newer(&embedded.version, &config.version) {
         tracing::info!(

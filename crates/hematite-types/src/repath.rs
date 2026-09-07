@@ -18,13 +18,77 @@
 use std::path::PathBuf;
 
 /// Where the prefix is placed inside the path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RepathLayout {
     /// `assets/X/y/z` → `ASSETS/{prefix}X/y/z`. Topaz-compatible.
     #[default]
     InFolder,
     /// `assets/X/y/z` → `assets/{prefix}/X/y/z`. LtMAO-compatible.
     Nested,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepathStatus {
+    Repathed,
+    HalflyRepathed,
+    NotRepathed,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct RepathReport {
+    pub source: String,
+    pub status: RepathStatus,
+    pub percent: f64,
+    pub canonical: u32,
+    pub prefixed: u32,
+    pub total: u32,
+    pub bins_scanned: u32,
+    pub bins_failed: u32,
+    pub unresolved_hashes: u32,
+    pub needs_repath: bool,
+    pub skip_reason: Option<String>,
+}
+
+impl RepathReport {
+    pub fn finish(&mut self) {
+        self.total = self.canonical + self.prefixed;
+        self.percent = if self.total == 0 {
+            0.0
+        } else {
+            self.prefixed as f64 / self.total as f64 * 100.0
+        };
+        self.status = if self.total == 0 || self.bins_failed > 0 || self.unresolved_hashes > 0 {
+            RepathStatus::Unknown
+        } else if self.percent >= 99.0 {
+            RepathStatus::Repathed
+        } else if self.percent >= 60.0 {
+            RepathStatus::HalflyRepathed
+        } else {
+            RepathStatus::NotRepathed
+        };
+        self.needs_repath = self.canonical > 0;
+        self.skip_reason = if self.bins_failed > 0 {
+            Some("Repath skipped: one or more input BINs could not be parsed".into())
+        } else if self.bins_scanned == 0 {
+            Some("Repath skipped: input contains no BIN files".into())
+        } else {
+            None
+        };
+    }
+
+    pub fn summary(&self) -> String {
+        if let Some(reason) = &self.skip_reason {
+            return reason.clone();
+        }
+        format!(
+            "Repath check: {:?}, {:.1}% prefixed; {} shipped canonical reference(s), {} unresolved hash(es)",
+            self.status, self.percent, self.canonical, self.unresolved_hashes
+        )
+    }
 }
 
 /// Options controlling the asset-repath pipeline.

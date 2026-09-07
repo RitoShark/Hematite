@@ -25,6 +25,10 @@ use walkdir::WalkDir;
 /// Folder finished mods are written into, next to the input.
 pub const OUTPUT_DIR_NAME: &str = "Hematite-Fixed";
 
+#[cfg(test)]
+#[path = "process_tests.rs"]
+mod tests;
+
 /// Session-level parameters shared by every file processing function.
 ///
 /// Bundles together the options that are constant for the entire run so that
@@ -495,6 +499,17 @@ fn process_wad_file(
     let mut all_files = wad_file
         .extract_all_files(hash_provider.as_ref())
         .context("Failed to extract files from WAD")?;
+
+    hematite_orchestrate::fix_folder::resolve_hex_chunk_names(&mut all_files, &bin_provider);
+    let mut repath_report = hematite_core::repath_check::check_repath(
+        &all_files,
+        &bin_provider,
+        hash_provider.as_ref(),
+        champions,
+    );
+    repath_report.source = file.to_string_lossy().into_owned();
+    ctx.ui.note(&repath_report.summary());
+    let repath_opts = repath_opts.filter(|_| repath_report.skip_reason.is_none());
 
     // === COMBO-BIN RELOCATION ===
     // Must run before the BIN fix loop (and before repath/restore-anm) so
@@ -1020,7 +1035,11 @@ fn process_wad_file(
 
     // === REPATH PIPELINE ===
     // Must run AFTER all BIN fixes so fixes operate on original paths.
-    if let Some(opts) = repath_opts {
+    let has_remaining_bin = all_files.iter().any(|(_, path, bytes)| {
+        (path.to_lowercase().ends_with(".bin") || repath_core::looks_like_bin(bytes))
+            && bin_provider.parse_bytes(bytes).is_ok()
+    });
+    if let Some(opts) = repath_opts.filter(|_| has_remaining_bin) {
         if !dry_run {
             ui.stage(&format!("Repathing assets (prefix “{}”)…", opts.prefix));
             tracing::info!(
@@ -1284,7 +1303,7 @@ fn process_wad_file(
             .collect();
 
         let skin_number = skin_info.primary_skin();
-        let is_binless = skin_info.is_binless;
+        let is_binless = repath_report.bins_scanned == 0 && repath_report.bins_failed == 0;
         let champion = if skin_info.champion.is_empty() {
             None
         } else {
@@ -1298,6 +1317,8 @@ fn process_wad_file(
             detected_issues: detected,
         });
     }
+
+    total_result.repath_reports.push(repath_report);
 
     // === WAD REBUILDING ===
     // Write modified WAD if any changes were made and not dry-run
@@ -1685,6 +1706,11 @@ fn process_modpkg_file(
         tracing::info!("No changes detected - modpkg not modified");
     }
 
+    for report in &mut total_result.repath_reports {
+        if let Ok(relative) = Path::new(&report.source).strip_prefix(temp_dir.path()) {
+            report.source = format!("{}::{}", file.display(), relative.display());
+        }
+    }
     Ok(total_result)
 }
 
@@ -1918,5 +1944,10 @@ fn process_fantome_file(
         tracing::info!("No changes detected - fantome not modified");
     }
 
+    for report in &mut total_result.repath_reports {
+        if let Ok(relative) = Path::new(&report.source).strip_prefix(temp_dir.path()) {
+            report.source = format!("{}::{}", file.display(), relative.display());
+        }
+    }
     Ok(total_result)
 }

@@ -8,7 +8,7 @@
 //!   (via a synthesized [`crate::args::Cli`]) so behaviour stays
 //!   consistent across entry points.
 
-use crate::args::{Cli, RepathLayoutArg, Verbosity};
+use crate::args::{Cli, Verbosity};
 use crate::banner;
 use anyhow::Result;
 use colored::Colorize;
@@ -254,8 +254,6 @@ pub fn build_fix_all_cli(input: PathBuf) -> Cli {
     let mut cli = baseline_cli(input);
     cli.all = true;
     cli.repath = true;
-    cli.repath_prefix = Some("hematite".into());
-    cli.repath_layout = RepathLayoutArg::Nested;
     cli
 }
 
@@ -267,6 +265,7 @@ fn build_check_cli(input: PathBuf) -> Cli {
 
 fn build_fix_no_repath_cli(input: PathBuf) -> Cli {
     let mut cli = baseline_cli(input);
+    cli.no_repath = true;
     cli.all = true;
     cli
 }
@@ -301,7 +300,7 @@ fn baseline_cli(input: PathBuf) -> Cli {
         repath: false,
         no_repath: false,
         repath_prefix: None,
-        repath_layout: RepathLayoutArg::InFolder,
+        repath_layout: None,
         invis_texture: false,
         game_wad: None,
         small_mod: false,
@@ -312,5 +311,19 @@ fn baseline_cli(input: PathBuf) -> Cli {
         game_path: None,
         no_live: false,
         restore_anm: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menus_honor_repath_configuration_and_explicit_opt_out() {
+        let cli = build_fix_all_cli("test.fantome".into());
+        assert!(cli.repath);
+        assert!(cli.repath_prefix.is_none());
+        assert!(cli.repath_layout.is_none());
+        assert!(build_fix_no_repath_cli("test.fantome".into()).no_repath);
     }
 }
