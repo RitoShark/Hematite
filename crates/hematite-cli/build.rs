@@ -4,4 +4,10 @@ fn main() {
         res.set_icon("icon.ico");
         res.compile().unwrap();
     }
+
+    println!("cargo::rustc-check-cfg=cfg(bmth)");
+    println!("cargo::rerun-if-changed=src/bmth.rs");
+    if std::path::Path::new("src/bmth.rs").exists() {
+        println!("cargo::rustc-cfg=bmth");
+    }
 }
