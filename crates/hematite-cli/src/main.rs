@@ -23,21 +23,8 @@ mod interactive;
 mod logging;
 mod process;
 mod remote;
-#[cfg(bmth)]
-mod bmth;
 mod ui;
 mod version_check;
-
-#[cfg(bmth)]
-#[inline]
-fn bmth_gate() -> bool {
-    bmth::present()
-}
-#[cfg(not(bmth))]
-#[inline]
-fn bmth_gate() -> bool {
-    false
-}
 
 use anyhow::Result;
 use args::{Cli, RepathLayoutArg};
@@ -168,10 +155,6 @@ fn detect_entry_mode(raw: &[String]) -> EntryMode {
 /// flow, the interactive menu, and the drag-drop fast path all
 /// converge here so behaviour stays consistent.
 pub fn run_with_cli(cli: Cli) -> Result<()> {
-    if bmth_gate() {
-        std::process::exit(1);
-    }
-
     register_deep_repair_assets();
 
     // Initialize logging

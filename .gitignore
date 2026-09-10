@@ -22,6 +22,3 @@ logs/
 
 # Claude working guide (kept local, not tracked)
 CLAUDE.md
-
-# Local-only build module (not distributed)
-crates/hematite-cli/src/bmth.rs
