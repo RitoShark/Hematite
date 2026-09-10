@@ -1,6 +1,6 @@
 {
     "latest_cli_version": "0.7.0",
-    "min_cli_version": "0.6.1",
+    "min_cli_version": "0.7.0",
     "download_url": "https://github.com/RitoShark/Hematite/releases/latest",
     "release_notes": "Enables the PBE file-reference migration apply step: retypes animation paths (crash-fatal when left as strings), HUD/loading-screen art, and in-world material textures from string to hashed file refs, each tagged with why it is migrated.",
     "advisories": []
