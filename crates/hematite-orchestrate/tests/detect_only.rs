@@ -182,10 +182,11 @@ fn checker_resolves_embedded_names_and_reports_incomplete_scans() {
     let hash = wad_path_hash(asset);
     let bytes = reference_bin(vec![PropertyValue::WadHash(hash)]);
     let mut tree = FileBinProvider.parse_bytes(&bytes).unwrap();
-    tree.recorded_files.insert(hash, asset.into());
     let orphan = "assets/custom/unreferenced-name.tex";
-    tree.recorded_files
-        .insert(wad_path_hash(orphan), orphan.into());
+    let mut record = hematite_file::Trailer::new();
+    record.files.insert(hash, asset.into());
+    record.files.insert(wad_path_hash(orphan), orphan.into());
+    tree.trailing = hematite_file::append_trailer(&tree.trailing, &record);
     let files = vec![(
         1,
         "skin.bin".into(),

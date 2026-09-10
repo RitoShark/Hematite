@@ -11,11 +11,7 @@ use rs_bin::{Bin as RsBin, BinEntry, BinType, BinValue};
 /// Convert an rs_bin `Bin` to a Hematite `BinTree` (after parsing).
 pub fn rs_bin_tree_to_hematite(rs_bin: RsBin) -> Result<BinTree> {
     let mut objects = IndexMap::new();
-    let recorded_files = rs_bin::read_path_map(&rs_bin)
-        .game
-        .into_iter()
-        .map(|path| (crate::wad_adapter::wad_path_hash(&path), path))
-        .collect();
+    let recorded_files = rs_bin::read_trailer(&rs_bin.trailing).files;
 
     for entry in rs_bin.entries {
         let obj = entry_to_hematite(entry)?;
@@ -40,11 +36,6 @@ pub fn hematite_tree_to_rs_bin(tree: &BinTree) -> Result<RsBin> {
     }
 
     bin.trailing = tree.trailing.clone();
-    if !tree.recorded_files.is_empty() {
-        let mut record = rs_bin::read_path_map(&bin);
-        record.game.extend(tree.recorded_files.values().cloned());
-        rs_bin::write_path_map(&mut bin, &record);
-    }
 
     Ok(bin)
 }
@@ -309,4 +300,48 @@ fn option_to_rs_bin_optional(opt: &Option<PropertyValue>) -> Result<BinValue> {
     };
 
     Ok(BinValue::Option { item, value })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recorded_files_never_reach_the_written_bin() {
+        let mut tree = BinTree::default();
+        tree.recorded_files.insert(0x1234, "assets/x.tex".into());
+
+        let bin = hematite_tree_to_rs_bin(&tree).unwrap();
+
+        assert!(bin.trailing.is_empty());
+    }
+
+    #[test]
+    fn a_carried_celmap_record_reads_back() {
+        let mut bin = RsBin::new();
+        let mut record = rs_bin::Trailer::new();
+        record.files.insert(0x1234, "assets/x.tex".into());
+        bin.trailing = rs_bin::append_trailer(&bin.trailing, &record);
+
+        let tree = rs_bin_tree_to_hematite(bin).unwrap();
+
+        assert_eq!(
+            tree.recorded_files.get(&0x1234).map(String::as_str),
+            Some("assets/x.tex")
+        );
+    }
+
+    #[test]
+    fn a_carried_celmap_record_survives_a_rewrite() {
+        let mut bin = RsBin::new();
+        let mut record = rs_bin::Trailer::new();
+        record.files.insert(0x1234, "assets/x.tex".into());
+        bin.trailing = rs_bin::append_trailer(&bin.trailing, &record);
+        let carried = bin.trailing.clone();
+
+        let tree = rs_bin_tree_to_hematite(bin).unwrap();
+        let written = hematite_tree_to_rs_bin(&tree).unwrap();
+
+        assert_eq!(written.trailing, carried);
+    }
 }

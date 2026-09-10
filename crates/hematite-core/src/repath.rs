@@ -492,8 +492,8 @@ pub fn collect_bin_asset_hashes(tree: &BinTree) -> Vec<u64> {
 /// Rewrite xxh64 `file` references (`PropertyValue::WadHash`) after WAD
 /// entries were renamed. `renames` maps `old_entry_hash` →
 /// `(new_entry_hash, new_path)`; every matching hash in the tree is replaced
-/// and the new pair is recorded in `tree.recorded_files` so the path survives
-/// in the CELMAP trailer. This is what keeps hand-migrated mods (whose BINs
+/// and the new pair is recorded in `tree.recorded_files` for the rest of the
+/// run to resolve. This is what keeps hand-migrated mods (whose BINs
 /// already carry `file` hashes instead of strings) working through repath —
 /// string rewriting never sees them, but the chunks still move.
 pub fn rewrite_bin_file_hashes(tree: &mut BinTree, renames: &HashMap<u64, (u64, String)>) -> u32 {

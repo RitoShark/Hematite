@@ -23,9 +23,9 @@ pub struct BinTree {
     /// Raw bytes after the declared BIN body (e.g. the CELMAP hash→path side
     /// table). Preserved verbatim through parse → write.
     pub trailing: Vec<u8>,
-    /// xxh64 `file` hash → original path pairs produced by transforms that
-    /// retype path strings into hashes. Merged into the bin's `ritobinmap`
-    /// record by the write adapter so the readable paths are never lost.
+    /// xxh64 `file` hash → path pairs: the ones the CELMAP record carried in,
+    /// plus the ones transforms mint while retyping path strings into hashes.
+    /// In-memory only — Hematite reads the record and never writes one.
     pub recorded_files: std::collections::BTreeMap<u64, String>,
 }
 

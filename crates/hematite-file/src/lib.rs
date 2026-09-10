@@ -11,3 +11,5 @@ pub mod texture_converter;
 pub mod wad_adapter;
 pub mod wad_builder;
 pub mod wad_folder;
+
+pub use rs_bin::{append_trailer, read_trailer, Trailer};
