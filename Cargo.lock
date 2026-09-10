@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-cli"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-core"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "hematite-types",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-file"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "heed",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-live"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "flate2",
  "serde_json",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-orchestrate"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "hematite-core",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "hematite-types"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "indexmap",
  "serde",
@@ -3159,7 +3159,7 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-registry"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
 dependencies = [
