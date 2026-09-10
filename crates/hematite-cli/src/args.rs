@@ -470,15 +470,20 @@ mod tests {
                 panic!("file_ref_migration.detect: expected ClassFieldIsString, got {other:?}")
             }
         }
+        // Report-only until the patch that reads hashed paths ships. Applying it early
+        // retypes a loading screen the current client still reads as a string, which breaks
+        // a mod that worked. Both shapes are accepted here so flipping it back on the day
+        // does not also mean editing a test.
         match &file_refs.apply {
             TransformAction::RetypeStringToFile { targets } => {
                 assert!(targets.iter().any(
                     |t| t.class == "StaticMaterialShaderSamplerDef" && t.field == "texturePath"
                 ));
             }
-            other => {
-                panic!("file_ref_migration.apply: expected RetypeStringToFile, got {other:?}")
-            }
+            TransformAction::ReportOnly => {}
+            other => panic!(
+                "file_ref_migration.apply: expected RetypeStringToFile or ReportOnly, got {other:?}"
+            ),
         }
 
         // gear_pull: dead_entry_link detect + pull_entries_from_game apply

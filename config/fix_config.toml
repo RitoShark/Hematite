@@ -58,10 +58,14 @@ targets = [
 [fixes.file_ref_migration.apply]
 type = "retype_string_to_file"
 targets = [
-    { class = "AnimationResourceData", field = "mAnimationFilePath" },
-    { class = "CensoredImage", field = "image" },
-    { class = "SkinCharacterDataProperties", field = "iconCircle" },
-    { class = "SkinCharacterDataProperties", field = "iconSquare" },
+    # CRASH: the engine reads animation paths through a code path that cannot fall back
+    # to the string form, so an unmigrated one is fatal rather than merely unresolved.
+    { class = "AnimationResourceData", field = "mAnimationFilePath", reason = "unmigrated_animation_path" },
+    # WARNING: interface and loading-screen art. Fails to resolve, renders missing.
+    { class = "SkinCharacterDataProperties", field = "iconCircle", reason = "unmigrated_hud_asset" },
+    { class = "SkinCharacterDataProperties", field = "iconSquare", reason = "unmigrated_hud_asset" },
+    { class = "CensoredImage", field = "image", reason = "unmigrated_hud_asset" },
+    # WARNING: in-world art. Inherits the rule's `unmigrated_asset`.
     { class = "SkinMeshDataProperties", field = "texture" },
     { class = "SkinMeshDataProperties_MaterialOverride", field = "texture" },
     { class = "StaticMaterialShaderSamplerDef", field = "texturePath" },
