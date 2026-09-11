@@ -1,34 +1,111 @@
-# Hematite
+<div align="center">
 
-Fix broken League of Legends custom skins. Drop a mod onto Hematite, let it repair what it can, then install the result with your mod manager.
+<img src="hematite-logo.png" alt="Hematite logo" width="150">
 
-![Hematite's terminal menu, with options to fix a mod, check it, or keep its original paths](docs/shots/hematite-cli.png)
+<h1>Hematite</h1>
 
-[Download](https://github.com/RitoShark/Hematite/releases/latest) · [CLI commands](#cli-commands) · [Developer guide](DEVELOPER.md) · [License](#license)
+[![Rust](https://img.shields.io/badge/Rust-stable-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Windows](https://img.shields.io/badge/Platform-Windows-0078D4?style=flat-square)](https://github.com/RitoShark/Hematite/releases/latest)
+[![Release](https://img.shields.io/github/v/release/RitoShark/Hematite?style=flat-square&color=e94355)](https://github.com/RitoShark/Hematite/releases/latest)
+[![License](https://img.shields.io/badge/License-AGPL--3.0_with_exception-22c55e?style=flat-square)](LICENSE)
 
-## Download and use
+[Download](#download) · [Features](#features) · [CLI commands](#cli-commands) · [License](#license)
 
-Grab `hematite-cli.exe` from the [latest release](https://github.com/RitoShark/Hematite/releases/latest). Windows builds are ready to run, with no installer.
+</div>
 
-Drag a mod onto the executable to apply the default fixes and repath its assets. Or open Hematite to choose between fixing, checking without changes, and fixing without repathing.
+---
 
-Results go into `Hematite-Fixed` next to the input. For a batch folder, that directory sits inside it and keeps the same subfolder structure. Originals are left alone by default.
+Drop a broken League skin onto Hematite and get a fixed copy back. It repairs outdated data, recovers missing assets from your game install, and sorts out paths so the mod can load again. Install the result with your usual mod manager.
 
-Hematite accepts `.fantome`, `.modpkg`, mod `.zip` archives, `.wad.client` files or folders, and individual `.bin` files. Pass a folder to process its supported files in one run. WAD output is an unpacked `.wad.client` folder.
+---
 
-It detects your League install automatically and uses it to recover missing files. Fixes that need game data are skipped when no install is available. The first run downloads the hash dictionary, and fix rules update from GitHub with a local fallback.
+## Features
 
-## What it fixes
+<details open>
+<summary><b>Checking and fixing</b> · find what's broken and repair it</summary>
+
+<br>
+
+<img align="right" width="420" src="docs/shots/hematite-cli.png" alt="Hematite's terminal menu with options to fix, check, or keep original paths">
+
+Drag a mod onto the executable to apply the default fixes, or open the menu to choose what happens.
 
 - Missing health bars, white models, broken icons, and outdated material or shader references.
 - Old VFX layouts and BIN fields that Riot changed from path strings to file hashes.
 - DDS textures, invalid TEX dimensions, and old mesh formats.
-- Missing gear, voiceover data, and asset references that can be recovered from your League install.
 - Stale champion data and unused animation or incompatible audio files, while keeping files the mod still references.
 
-Repathing moves mod assets under a separate prefix and updates their references to avoid collisions with game files. Use **Fix without repathing** when you want to keep the original paths.
+**Check a mod** reports issues without changing anything.
+
+<br clear="all">
+
+</details>
+
+<details>
+<summary><b>Repathing</b> · keep mod assets from colliding with game files</summary>
+
+<br>
+
+Hematite moves mod assets under a separate prefix and updates their references. Repathing is included in the default fix run.
+
+Choose **Fix without repathing**, or pass `--no-repath`, when you want to keep the original paths.
+
+</details>
+
+<details>
+<summary><b>Recovery</b> · pull missing files from your League install</summary>
+
+<br>
+
+Hematite detects your League install and uses it to recover missing gear, voiceover data, and referenced assets. Use `--restore-anm` to try recovering missing animations too.
+
+Fix rules update from GitHub with a local fallback, so new rules can ship without a new executable. The hash dictionary downloads on the first run.
+
+</details>
+
+<details>
+<summary><b>Batch processing</b> · fix a folder of mods in one run</summary>
+
+<br>
+
+Accepts `.fantome`, `.modpkg`, mod `.zip` archives, `.wad.client` files or folders, and individual `.bin` files. Pass a folder to process the supported files inside it and its subfolders.
+
+Results go into `Hematite-Fixed` next to the input. For a batch folder, that directory sits inside it and keeps the same subfolder structure. Originals are left alone by default. WAD output is an unpacked `.wad.client` folder.
+
+</details>
+
+---
+
+## Download
+
+Grab `hematite-cli.exe` from the [latest release](https://github.com/RitoShark/Hematite/releases/latest) and run it. No installer needed. Drag a mod onto it to start fixing, or double-click it for the menu.
+
+> [!NOTE]
+> Recovering missing game files needs a League install. Hematite detects it automatically, or you can set `--game-path`. Fixes that need game data are skipped when no install is available.
+
+<details>
+<summary><b>Build it yourself</b></summary>
+
+<br>
+
+Needs stable Rust and the Visual Studio C++ build tools on Windows.
+
+```powershell
+git clone https://github.com/RitoShark/Hematite.git
+cd Hematite
+cargo build --release --bin hematite-cli
+```
+
+The executable is at `target/release/hematite-cli.exe`. The engine is also available as Rust crates for use in other tools.
+
+</details>
 
 ## CLI commands
+
+<details>
+<summary><b>Commands and examples</b> · fixing, checking, batch runs, and options</summary>
+
+<br>
 
 Open PowerShell in the folder containing `hematite-cli.exe`. Replace the example paths with your own, keeping quotes around paths that contain spaces.
 
@@ -51,27 +128,20 @@ Open PowerShell in the folder containing `hematite-cli.exe`. Replace the example
 
 The same commands work with the other supported inputs. `--no-pause` skips the exit prompt; `--json` does this automatically.
 
-## Build and contribute
+</details>
 
-Install stable Rust and the Visual Studio C++ build tools on Windows, then:
+## Notes
 
-```powershell
-git clone https://github.com/RitoShark/Hematite.git
-cd Hematite
-cargo build --release --bin hematite-cli
-```
-
-The executable is at `target/release/hematite-cli.exe`. The engine is also available as Rust crates for use in other tools.
-
-Fix rules live in [config/fix_config.toml](config/fix_config.toml). Start with [CONTRIBUTING.md](CONTRIBUTING.md) for PRs and [DEVELOPER.md](DEVELOPER.md) for the engine and rule format. See the [repair notes](docs/repath-and-ltk-review.md) for known gaps.
-
-Please follow the [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues as described in [SECURITY.md](SECURITY.md).
+- Fix rules live in [config/fix_config.toml](config/fix_config.toml). See the [developer guide](DEVELOPER.md) for the engine and rule format, and the [repair notes](docs/repath-and-ltk-review.md) for known gaps.
+- See [CONTRIBUTING.md](CONTRIBUTING.md) if you want to send a PR, and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Report security issues as described in [SECURITY.md](SECURITY.md).
+- Hematite is not affiliated with Riot Games. League of Legends and its assets belong to Riot.
 
 ## Credits
 
-Made by [SirDexal](https://github.com/SirDexal) and the Hematite contributors. Built on [RitoShark-Crates](https://github.com/RitoShark/RitoShark-Crates), with hashes from [CommunityDragon](https://www.communitydragon.org) and [lmdb-hashes](https://github.com/RitoShark/lmdb-hashes).
-
-Hematite is not affiliated with Riot Games. League of Legends and its assets belong to Riot.
+- **[SirDexal](https://github.com/SirDexal)** and the Hematite contributors.
+- **[RitoShark-Crates](https://github.com/RitoShark/RitoShark-Crates)** for the file formats.
+- **[CommunityDragon](https://www.communitydragon.org)** and **[lmdb-hashes](https://github.com/RitoShark/lmdb-hashes)** for the hashes.
 
 ## License
 

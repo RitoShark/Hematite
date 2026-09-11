@@ -6,7 +6,7 @@ For a larger change, open an issue first so we can agree on the approach.
 
 ## Working on a fix
 
-Follow the build steps in the [README](README.md#build-and-contribute). The [developer guide](DEVELOPER.md) covers the engine and transform framework.
+Follow the build steps in the [README](README.md#download). The [developer guide](DEVELOPER.md) covers the engine and transform framework.
 
 - Prefer a rule in `config/fix_config.toml` when it can express the fix. The top-level `enabled_fixes` list controls the defaults.
 - Keep changes focused and match the surrounding code.
