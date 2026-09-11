@@ -140,6 +140,8 @@ The same commands work with the other supported inputs. `--no-pause` skips the e
 ## Credits
 
 - **[SirDexal](https://github.com/SirDexal)** and the Hematite contributors.
+- **[Meta Wiki](https://meta-wiki.leaguetoolkit.dev)** for documenting BIN fields and patch changes that helped us build the fix list.
+- **[LTK Manager](https://github.com/LeagueToolkit/ltk-manager)** for the fix list and migration tables we used as references for Hematite's rules. Thanks to their contributors for sharing that work.
 - **[RitoShark-Crates](https://github.com/RitoShark/RitoShark-Crates)** for the file formats.
 - **[CommunityDragon](https://www.communitydragon.org)** and **[lmdb-hashes](https://github.com/RitoShark/lmdb-hashes)** for the hashes.
 
