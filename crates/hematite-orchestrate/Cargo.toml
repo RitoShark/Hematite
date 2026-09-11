@@ -4,6 +4,7 @@ description = "Folder-level fix orchestration — the extract → detect → fix
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license-file.workspace = true
 
 [dependencies]
 hematite-types = { workspace = true }

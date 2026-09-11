@@ -4,6 +4,7 @@ description = "Live League of Legends game file access: install detection, TOC-o
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license-file.workspace = true
 
 [dependencies]
 thiserror = "1"

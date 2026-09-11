@@ -4,6 +4,7 @@ description = "CLI binary for Hematite skin fixer"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license-file.workspace = true
 
 [[bin]]
 name = "hematite-cli"

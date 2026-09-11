@@ -4,6 +4,7 @@ description = "Core data types for Hematite — zero LTK dependencies"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license-file.workspace = true
 
 [dependencies]
 serde = { workspace = true }

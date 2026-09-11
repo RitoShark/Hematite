@@ -4,6 +4,7 @@ description = "File-format adapter — the ONLY crate that imports the RitoShark
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license-file.workspace = true
 
 [dependencies]
 hematite-types = { workspace = true }

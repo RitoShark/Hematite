@@ -13,6 +13,7 @@ members = [
 version = "0.7.0"
 edition = "2021"
 authors = ["SirDexal"]
+license-file = "LICENSE"
 
 
 [workspace.dependencies]

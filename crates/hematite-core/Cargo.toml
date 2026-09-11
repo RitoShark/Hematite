@@ -4,6 +4,7 @@ description = "Fix engine for Hematite — detection, transforms, shared utiliti
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license-file.workspace = true
 
 [dependencies]
 hematite-types = { workspace = true }

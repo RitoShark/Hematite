@@ -60,8 +60,9 @@ jobs:
         run: |
           mkdir -p release
           cp target/release/hematite-cli.exe release/
+          cp LICENSE release/
           cd release
-          7z a -tzip hematite-cli-windows-x64.zip hematite-cli.exe
+          7z a -tzip hematite-cli-windows-x64.zip hematite-cli.exe LICENSE
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -74,3 +75,4 @@ jobs:
           files: |
             release/hematite-cli.exe
             release/hematite-cli-windows-x64.zip
+            release/LICENSE
