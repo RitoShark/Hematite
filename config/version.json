@@ -1,7 +1,7 @@
 {
-    "latest_cli_version": "0.7.0",
+    "latest_cli_version": "0.7.1",
     "min_cli_version": "0.7.0",
     "download_url": "https://github.com/RitoShark/Hematite/releases/latest",
-    "release_notes": "Enables the PBE file-reference migration apply step: retypes animation paths (crash-fatal when left as strings), HUD/loading-screen art, and in-world material textures from string to hashed file refs, each tagged with why it is migrated.",
+    "release_notes": "Removes the BMTH/Rose startup gate: Hematite no longer exits silently when Rose is installed. Includes CELMAP reading support and project documentation updates.",
     "advisories": []
 }
