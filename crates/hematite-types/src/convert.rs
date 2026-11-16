@@ -128,6 +128,8 @@ pub fn rs_bin_value_to_hematite(val: &BinValue) -> Result<PropertyValue> {
         // Strings & hashes
         BinValue::String(v) => PropertyValue::String(v.clone()),
         BinValue::Hash(v) => PropertyValue::Hash(*v),
+        // Keep the wire width, including wide hashes whose value fits in u32.
+        BinValue::Hash64(_) => PropertyValue::NativeLeaf(val.clone()),
         BinValue::File(v) => PropertyValue::WadHash(*v),
         BinValue::Link(v) => PropertyValue::Link(*v),
         BinValue::Rgba(v) => PropertyValue::Color(*v),

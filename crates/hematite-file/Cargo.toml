@@ -14,11 +14,11 @@ indexmap = { workspace = true }
 
 # File I/O adapters. The generic BIN editor and shared types also depend on rs_bin.
 # Using git versions (pinned rev) to match the project's CI convention.
-rs_io = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "e1b75e4" }
-rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "e1b75e4" }
-rs_wad = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "e1b75e4" }
-rs_tex = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "e1b75e4" }
-rs_mesh = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "e1b75e4" }
+rs_io = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "6b43a0d" }
+rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "6b43a0d" }
+rs_wad = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "6b43a0d" }
+rs_tex = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "6b43a0d" }
+rs_mesh = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "6b43a0d" }
 
 # Image type shared with rs_tex's encode/decode API.
 image = { version = "0.25", default-features = false }

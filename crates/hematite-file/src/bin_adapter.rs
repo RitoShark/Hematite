@@ -127,6 +127,32 @@ mod native_edit_tests {
     use serde_json::json;
 
     #[test]
+    fn binary_roundtrip_preserves_both_hash_widths() {
+        for value in [
+            BinValue::Hash(u32::MAX),
+            BinValue::Hash64(0),
+            BinValue::Hash64(7),
+            BinValue::Hash64(0x7394ac037b93317f),
+            BinValue::Hash64(u64::MAX),
+        ] {
+            let mut bin = RsBin::new();
+            bin.entries.push(BinEntry {
+                path_hash: 1,
+                class_hash: 2,
+                fields: [(3, value.clone())].into_iter().collect(),
+            });
+            let bytes = bin.to_bytes().unwrap();
+            let tree = FileBinProvider.parse_bytes(&bytes).unwrap();
+            let written = FileBinProvider.write_bytes(&tree).unwrap();
+            assert_eq!(written, bytes, "hash width changed for {value:?}");
+            assert_eq!(
+                RsBin::from_bytes(&written).unwrap().entries[0].fields[&3],
+                value
+            );
+        }
+    }
+
+    #[test]
     fn binary_roundtrip_preserves_empty_tags_and_patch_metadata_during_edits() {
         let mut bin = RsBin::new();
         bin.is_patch = true;
