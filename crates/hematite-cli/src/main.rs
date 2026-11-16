@@ -213,7 +213,10 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
 
     let start_time = Instant::now();
 
-    let config = remote::load_fix_config();
+    let config = match &cli.config {
+        Some(path) => remote::load_local_fix_config(path)?,
+        None => remote::load_fix_config(),
+    };
     let mut selected_fixes = args::collect_selected_fixes(&cli, &config);
     let champion_list = remote::load_champion_list();
     let champions = CharacterRelations::from_champion_list(&champion_list);

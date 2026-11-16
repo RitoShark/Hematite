@@ -1,12 +1,8 @@
 //! # hematite-core
 //!
-//! The fix engine for Hematite. This crate contains all detection and transformation
-//! logic but has **zero** file-format-crate imports. It operates on types from
-//! [`hematite_types`] and interacts with file formats through trait abstractions.
-//!
-//! ## Key rule: NO FILE-FORMAT-CRATE IMPORTS
-//! When the RitoShark `rs_*` crates break their APIs, only `hematite-file` needs updating.
-//! This crate stays untouched.
+//! The fix engine for Hematite. Generic edit programs use native rs_bin values.
+//! Legacy repair and repath algorithms use hematite-types through the shared BIN bridge.
+//! Filesystem, WAD, and live-game access remain behind provider traits.
 //!
 //! ## Modules
 //! - [`traits`] — `BinProvider`, `HashProvider`, `WadProvider` trait definitions

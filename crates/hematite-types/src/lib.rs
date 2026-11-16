@@ -1,8 +1,7 @@
 //! # hematite-types
 //!
-//! Pure data types for the Hematite skin fixer.
-//! This crate has **zero** league-toolkit dependencies — it defines Hematite's
-//! own domain model that the rest of the workspace operates on.
+//! Config schemas, legacy repair types, and the shared rs_bin conversion bridge.
+//! Native document metadata and empty container tags survive legacy transforms.
 //!
 //! ## Modules
 //! - [`hash`] — Newtype wrappers for League's 4 hash kinds
@@ -15,6 +14,8 @@
 pub mod bin;
 pub mod champion;
 pub mod config;
+pub mod convert;
+pub mod edit;
 pub mod hash;
 pub mod repath;
 pub mod result;

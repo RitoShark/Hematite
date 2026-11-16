@@ -80,7 +80,7 @@ pub trait GameProvider: Send + Sync {
     /// Raw bytes of a game file (None when absent or unreadable).
     fn pull_raw(&self, path: &str) -> Option<Vec<u8>>;
     /// Pull AND parse a game BIN into hematite's tree model.
-    /// (Parsing happens inside the impl — core stays format-free.)
+    /// (File reading and binary parsing happen inside the provider.)
     fn game_bin(&self, path: &str) -> Option<BinTree>;
 }
 

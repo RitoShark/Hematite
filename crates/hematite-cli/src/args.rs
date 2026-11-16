@@ -41,6 +41,10 @@ pub struct Cli {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
+    /// Use a local JSON or TOML rule file instead of remote/default rules.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
     // Fix flags
     #[arg(long, help = "Fix missing health bars")]
     pub healthbar: bool,
@@ -379,17 +383,16 @@ mod tests {
         use hematite_types::hash::{FieldHash, PathHash, TypeHash};
         let config = load_repo_config();
         let rule = &config.fixes["file_ref_migration"];
-        let DetectionRule::ClassFieldIsString { targets: detection } = &rule.detect else {
+        assert!(matches!(rule.detect, DetectionRule::Always));
+        let TransformAction::Edit { operations } = &rule.apply else {
             panic!()
         };
-        let TransformAction::RetypeStringToFile { targets } = &rule.apply else {
+        let hematite_types::edit::EditOperation::Convert { select, from, to } = &operations[0]
+        else {
             panic!()
         };
-        assert_eq!(targets.len(), 385);
-        assert_eq!(
-            serde_json::to_value(detection).unwrap(),
-            serde_json::to_value(targets).unwrap()
-        );
+        assert_eq!((from.as_str(), to.as_str()), ("string", "file"));
+        assert_eq!(select.targets.len(), 385);
         let mut tree = BinTree::default();
         for (id, class, field, value) in [
             (
@@ -439,7 +442,7 @@ mod tests {
             );
         }
         assert_eq!(
-            hematite_core::transform::retype_file::apply_to_tree(&mut tree, targets),
+            hematite_core::transform::edit::apply(&mut tree, operations, false).unwrap(),
             3
         );
         assert!(matches!(
@@ -447,7 +450,7 @@ mod tests {
             PropertyValue::String(_)
         ));
         assert_eq!(
-            hematite_core::transform::retype_file::apply_to_tree(&mut tree, targets),
+            hematite_core::transform::edit::apply(&mut tree, operations, false).unwrap(),
             0
         );
     }
@@ -476,7 +479,7 @@ mod tests {
 
         let config = load_repo_config();
 
-        assert_eq!(config.version, "2.3.5");
+        assert_eq!(config.version, "2.4.0");
 
         // The central enable list is the single authority — spot-check both
         // directions plus a WAD-level entry.
@@ -500,34 +503,25 @@ mod tests {
             hematite_types::config::FixPhase::PostRepath,
             "file_ref_migration must run post-repath"
         );
-        match &file_refs.detect {
-            DetectionRule::ClassFieldIsString { targets } => {
-                assert!(
-                    targets
-                        .iter()
-                        .any(|t| t.class == "AnimationResourceData"
-                            && t.field == "mAnimationFilePath")
-                );
-                assert!(targets
-                    .iter()
-                    .any(|t| t.class == "SkinMeshDataProperties_MaterialOverride"
-                        && t.field == "texture"));
-            }
-            other => {
-                panic!("file_ref_migration.detect: expected ClassFieldIsString, got {other:?}")
-            }
+        assert!(matches!(file_refs.detect, DetectionRule::Always));
+        let TransformAction::Edit { operations } = &file_refs.apply else {
+            panic!("expected edit program")
+        };
+        let hematite_types::edit::EditOperation::Convert { select, from, to } = &operations[0]
+        else {
+            panic!("expected conversion")
+        };
+        assert_eq!((from.as_str(), to.as_str()), ("string", "file"));
+        for (class, field) in [
+            ("AnimationResourceData", "mAnimationFilePath"),
+            ("SkinMeshDataProperties_MaterialOverride", "texture"),
+            ("StaticMaterialShaderSamplerDef", "texturePath"),
+        ] {
+            assert!(select
+                .targets
+                .iter()
+                .any(|t| t.class == class && t.field == field));
         }
-        match &file_refs.apply {
-            TransformAction::RetypeStringToFile { targets } => {
-                assert!(targets.iter().any(
-                    |t| t.class == "StaticMaterialShaderSamplerDef" && t.field == "texturePath"
-                ));
-            }
-            other => {
-                panic!("file_ref_migration.apply: expected RetypeStringToFile, got {other:?}")
-            }
-        }
-
         // gear_pull: dead_entry_link detect + pull_entries_from_game apply
         // with nuke_fallback_field set (last-resort fallback).
         let gear_pull = config

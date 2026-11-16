@@ -132,7 +132,7 @@ The same commands work with the other supported inputs. `--no-pause` skips the e
 
 ## Notes
 
-- Fix rules live in [config/fix_config.toml](config/fix_config.toml). See the [developer guide](DEVELOPER.md) for the engine and rule format, and the [repair notes](docs/repath-and-ltk-review.md) for known gaps.
+- Fix rules live in [config/fix_config.toml](config/fix_config.toml). Use `--config rules.json` or `--config rules.toml` for your own rules; see [configurable BIN edits](docs/configurable-edits.md). See the [developer guide](DEVELOPER.md) for the engine and rule format, and the [repair notes](docs/repath-and-ltk-review.md) for known gaps.
 - See [CONTRIBUTING.md](CONTRIBUTING.md) if you want to send a PR, and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 - Report security issues as described in [SECURITY.md](SECURITY.md).
 - Hematite is not affiliated with Riot Games. League of Legends and its assets belong to Riot.

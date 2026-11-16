@@ -1,9 +1,7 @@
 //! BIN tree types — Hematite's own representation of League BIN files.
 //!
-//! These types mirror the structure of LTK's `BinTree` / `BinObject` / `PropertyValueEnum`
-//! but are **owned by Hematite**. The LTK adapter crate converts between these and
-//! whatever LTK version is currently in use, isolating the rest of the codebase from
-//! LTK breaking changes.
+//! Legacy repair and repath representation. Generic edits use native rs_bin values
+//! through the shared bridge in this crate.
 //!
 //! ## Key types
 //! - [`BinTree`] — A parsed `.bin` file (map of path_hash → [`BinObject`])
@@ -17,6 +15,8 @@ use indexmap::IndexMap;
 /// A parsed BIN file — a map of entry path hashes to objects.
 #[derive(Debug, Clone, Default)]
 pub struct BinTree {
+    /// Original document header and patches, retained across legacy transforms.
+    pub document: Option<Box<rs_bin::Bin>>,
     pub objects: IndexMap<u32, BinObject>,
     /// Linked BIN dependencies (paths from the BIN header's `dependencies` list).
     pub linked: Vec<String>,
@@ -52,9 +52,12 @@ pub struct BinProperty {
 /// All possible property value types in a BIN file.
 ///
 /// Mirrors rs_bin's `BinValue`. The conversion between
-/// rs_bin and Hematite types happens in `hematite-file/src/convert.rs`.
+/// rs_bin and Hematite types happens in `hematite-types/src/convert.rs`.
 #[derive(Debug, Clone)]
 pub enum PropertyValue {
+    /// Empty typed containers and `none` have no children for legacy walkers.
+    /// Keep their native representation instead of guessing their type on write.
+    NativeLeaf(rs_bin::BinValue),
     // Primitives
     Bool(bool),
     I8(i8),

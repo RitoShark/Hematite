@@ -882,6 +882,7 @@ dependencies = [
  "indexmap",
  "once_cell",
  "regex",
+ "rs_bin",
  "serde",
  "serde_json",
  "strsim",
@@ -905,6 +906,7 @@ dependencies = [
  "rs_mesh",
  "rs_tex",
  "rs_wad",
+ "serde_json",
  "tempfile",
  "tracing",
  "xxhash-rust",
@@ -947,7 +949,9 @@ dependencies = [
 name = "hematite-types"
 version = "0.7.0"
 dependencies = [
+ "anyhow",
  "indexmap",
+ "rs_bin",
  "serde",
  "serde_json",
 ]

@@ -349,6 +349,18 @@ pub fn get_cache_status() -> Result<CacheStatus> {
     })
 }
 
+/// Explicit user configs fail visibly; never substitute the default rules.
+pub fn load_local_fix_config(path: &Path) -> Result<FixConfig> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("reading config {}", path.display()))?;
+    let text = text.trim_start_matches('\u{feff}');
+    match toml::from_str(text) {
+        Ok(config) => Ok(config),
+        Err(toml_error) => serde_json::from_str(text)
+            .with_context(|| format!("invalid config {} (TOML: {toml_error})", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

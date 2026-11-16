@@ -272,6 +272,7 @@ fn build_fix_no_repath_cli(input: PathBuf) -> Cli {
 
 fn baseline_cli(input: PathBuf) -> Cli {
     Cli {
+        config: None,
         input: Some(input),
         output: None,
         healthbar: false,

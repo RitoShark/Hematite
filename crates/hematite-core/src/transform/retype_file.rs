@@ -4,9 +4,9 @@
 
 use crate::context::FixContext;
 use crate::strings::fnv1a_hash;
-use hematite_types::bin::{BinTree, PropertyValue, StructValue};
+use hematite_types::bin::{BinTree, PropertyValue};
 use hematite_types::config::ClassFieldTarget;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 pub fn wad_ref_hash(path: &str) -> u64 {
     xxhash_rust::xxh64::xxh64(path.to_lowercase().as_bytes(), 0)
@@ -30,96 +30,25 @@ pub fn apply(ctx: &mut FixContext, targets: &[ClassFieldTarget]) -> u32 {
     apply_to_tree(&mut ctx.tree, targets)
 }
 
+/// Compatibility entry point for old configs. The generic rs_bin editor owns conversion.
 pub fn apply_to_tree(tree: &mut BinTree, targets: &[ClassFieldTarget]) -> u32 {
-    let resolved = resolve_targets(targets);
-    let BinTree {
-        objects,
-        recorded_files,
-        ..
-    } = tree;
-
-    let mut changes = 0u32;
-    for obj in objects.values_mut() {
-        for prop in obj.properties.values_mut() {
-            if resolved.contains(&(obj.class_hash.0, prop.name_hash.0)) {
-                changes += convert_in_place(&mut prop.value, recorded_files);
-            }
-            changes += recurse_apply(&mut prop.value, &resolved, recorded_files);
-        }
-    }
-    changes
-}
-
-fn recurse_apply(
-    value: &mut PropertyValue,
-    targets: &HashSet<(u32, u32)>,
-    pairs: &mut BTreeMap<u64, String>,
-) -> u32 {
-    let mut changes = 0u32;
-    match value {
-        PropertyValue::Struct(s) | PropertyValue::Embedded(s) => {
-            changes += apply_struct(s, targets, pairs);
-        }
-        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
-            for item in items {
-                changes += recurse_apply(item, targets, pairs);
-            }
-        }
-        PropertyValue::Optional(inner) => {
-            if let Some(v) = inner.as_mut() {
-                changes += recurse_apply(v, targets, pairs);
-            }
-        }
-        PropertyValue::Map(entries) => {
-            for (_k, v) in entries {
-                changes += recurse_apply(v, targets, pairs);
-            }
-        }
-        _ => {}
-    }
-    changes
-}
-
-fn apply_struct(
-    s: &mut StructValue,
-    targets: &HashSet<(u32, u32)>,
-    pairs: &mut BTreeMap<u64, String>,
-) -> u32 {
-    let mut changes = 0u32;
-    for prop in s.properties.values_mut() {
-        if targets.contains(&(s.class_hash.0, prop.name_hash.0)) {
-            changes += convert_in_place(&mut prop.value, pairs);
-        }
-        changes += recurse_apply(&mut prop.value, targets, pairs);
-    }
-    changes
-}
-
-// Only string payloads convert; option/list/map wrappers keep their shape and the
-// write adapter derives the new element tags (option[string] → option[file]) itself.
-fn convert_in_place(value: &mut PropertyValue, pairs: &mut BTreeMap<u64, String>) -> u32 {
-    match value {
-        PropertyValue::String(s) => {
-            let hash = wad_ref_hash(s);
-            pairs.insert(hash, std::mem::take(s));
-            *value = PropertyValue::WadHash(hash);
-            1
-        }
-        PropertyValue::Optional(inner) => match inner.as_mut() {
-            Some(v) => convert_in_place(v, pairs),
-            None => 0,
+    use hematite_types::edit::{EditOperation, Selector};
+    let operations = [EditOperation::Convert {
+        select: Selector {
+            targets: targets.to_vec(),
+            ..Default::default()
         },
-        PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) => {
-            items.iter_mut().map(|v| convert_in_place(v, pairs)).sum()
+        from: "string".into(),
+        to: "file".into(),
+    }];
+    match super::edit::apply(tree, &operations, false) {
+        Ok(changes) => changes,
+        Err(error) => {
+            tracing::error!("legacy conversion failed: {error:#}");
+            0
         }
-        PropertyValue::Map(entries) => entries
-            .iter_mut()
-            .map(|(_k, v)| convert_in_place(v, pairs))
-            .sum(),
-        _ => 0,
     }
 }
-
 pub fn detect(tree: &BinTree, targets: &[ClassFieldTarget]) -> bool {
     let resolved = resolve_targets(targets);
     tree.objects.values().any(|obj| {
@@ -163,7 +92,7 @@ fn holds_string(value: &PropertyValue) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hematite_types::bin::{BinObject, BinProperty};
+    use hematite_types::bin::{BinObject, BinProperty, StructValue};
     use hematite_types::hash::{FieldHash, PathHash, TypeHash};
     use indexmap::IndexMap;
 

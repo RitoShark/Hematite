@@ -19,6 +19,7 @@
 //! | [`resolve_refs`] | `ResolveDeadRefs` | PropertyWalker (visit_string) + game-TOC ladder |
 
 pub mod change_type;
+pub mod edit;
 pub mod ensure_field;
 pub mod merge_linked;
 pub mod pull_entries;
@@ -46,6 +47,15 @@ pub fn apply_transform(
     entry_type: Option<&str>,
 ) -> u32 {
     match action {
+        TransformAction::Edit { operations } => {
+            match edit::apply(&mut ctx.tree, operations, false) {
+                Ok(count) => count,
+                Err(error) => {
+                    tracing::error!("BIN edit failed: {error:#}");
+                    0
+                }
+            }
+        }
         TransformAction::EnsureField {
             field,
             value,

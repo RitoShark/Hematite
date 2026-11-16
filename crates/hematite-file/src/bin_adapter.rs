@@ -117,3 +117,143 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod native_edit_tests {
+    use super::*;
+    use hematite_core::transform::edit;
+    use hematite_types::edit::EditOperation;
+    use rs_bin::{BinEntry, BinType, BinValue};
+    use serde_json::json;
+
+    #[test]
+    fn binary_roundtrip_preserves_empty_tags_and_patch_metadata_during_edits() {
+        let mut bin = RsBin::new();
+        bin.is_patch = true;
+        bin.patch_header = [1, 0, 0, 0, 0, 0, 0, 0];
+        bin.patches.push(rs_bin::BinPatch {
+            key_hash: 2,
+            path: "some.field".into(),
+            value: BinValue::U8(1),
+        });
+        bin.entries.push(BinEntry {
+            path_hash: 1,
+            class_hash: edit::hash("Custom").unwrap(),
+            fields: [
+                (
+                    edit::hash("asset").unwrap(),
+                    BinValue::String("ASSETS/custom.tex".into()),
+                ),
+                (
+                    2,
+                    BinValue::Option {
+                        item: BinType::File,
+                        value: None,
+                    },
+                ),
+                (
+                    3,
+                    BinValue::List {
+                        is_list2: true,
+                        item: BinType::Embed,
+                        items: vec![],
+                    },
+                ),
+                (
+                    4,
+                    BinValue::Map {
+                        key: BinType::Hash,
+                        value: BinType::String,
+                        entries: vec![],
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        });
+        let before = bin.to_bytes().unwrap();
+        let mut tree = FileBinProvider.parse_bytes(&before).unwrap();
+        assert_eq!(FileBinProvider.write_bytes(&tree).unwrap(), before);
+        let ops: Vec<EditOperation> = serde_json::from_value(json!([
+            {"op":"convert","select":{"classes":["Custom"],"path":["asset"]},"from":"string","to":"file"}
+        ])).unwrap();
+        assert_eq!(edit::apply(&mut tree, &ops, true).unwrap(), 1);
+        assert_eq!(FileBinProvider.write_bytes(&tree).unwrap(), before);
+        edit::apply(&mut tree, &ops, false).unwrap();
+        let after = RsBin::from_bytes(&FileBinProvider.write_bytes(&tree).unwrap()).unwrap();
+        bin.entries[0].fields.insert(
+            edit::hash("asset").unwrap(),
+            rs_bin::value_from_text(r#"file = "ASSETS/custom.tex""#, None).unwrap(),
+        );
+        assert_eq!(after, bin);
+    }
+}
+
+#[cfg(test)]
+mod edit_pipeline_tests {
+    use super::*;
+    use hematite_core::{context::FixContext, pipeline::apply_fixes_in_phase, traits::WadProvider};
+    use hematite_types::{
+        champion::CharacterRelations,
+        config::{FixConfig, FixPhase},
+    };
+
+    struct EmptyWad;
+    impl WadProvider for EmptyWad {
+        fn has_path(&self, _: &str) -> bool {
+            false
+        }
+        fn has_hash(&self, _: u64) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn json_rules_preview_apply_and_repeat_through_real_pipeline() {
+        let config: FixConfig = serde_json::from_str(
+            include_str!("../../../config/edit_example.json").trim_start_matches('\u{feff}'),
+        )
+        .unwrap();
+        let bin = rs_bin::from_text(
+            r#"#PROP_text
+version: u32 = 3
+entries: map[hash,embed] = {
+    0x1 = SkinMeshDataProperties { texture: string = "assets/custom.tex" }
+}
+"#,
+            None,
+        )
+        .unwrap();
+        let original = bin.to_bytes().unwrap();
+        let hashes = crate::hash_adapter::TxtHashProvider::new();
+        let champions = CharacterRelations::default();
+        let mut ctx = FixContext {
+            tree: FileBinProvider.parse_bytes(&original).unwrap(),
+            hashes: &hashes,
+            wad: &EmptyWad,
+            champions: &champions,
+            file_path: "test.bin".into(),
+            files_to_remove: vec![],
+            linked_trees: Default::default(),
+            shader_validator: None,
+            game: None,
+            additional_bins: vec![],
+        };
+        let ids = config.default_fix_ids();
+        let standard = apply_fixes_in_phase(&mut ctx, &config, &ids, false, FixPhase::Standard);
+        assert_eq!(standard.fixes_applied, 0);
+        let preview = apply_fixes_in_phase(&mut ctx, &config, &ids, true, FixPhase::PostRepath);
+        assert_eq!(preview.fixes_applied, 1);
+        assert_eq!(FileBinProvider.write_bytes(&ctx.tree).unwrap(), original);
+        let applied = apply_fixes_in_phase(&mut ctx, &config, &ids, false, FixPhase::PostRepath);
+        assert_eq!(applied.fixes_applied, 1);
+        assert_eq!(applied.fixes_failed, 0);
+        assert_eq!(
+            preview.applied_fixes[0].changes_count,
+            applied.applied_fixes[0].changes_count
+        );
+        let repeated = apply_fixes_in_phase(&mut ctx, &config, &ids, false, FixPhase::PostRepath);
+        assert_eq!(repeated.fixes_applied, 0);
+        assert_eq!(repeated.fixes_failed, 0);
+    }
+}

@@ -10,3 +10,5 @@ license-file.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 indexmap = { workspace = true }
+anyhow = { workspace = true }
+rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "e1b75e4" }

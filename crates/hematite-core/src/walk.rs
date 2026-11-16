@@ -117,7 +117,7 @@ fn walk_value(
 
         Bool(_) | I8(_) | U8(_) | I16(_) | U16(_) | I32(_) | U32(_) | I64(_) | U64(_) | F32(_)
         | Vector2(_) | Vector3(_) | Vector4(_) | Matrix4x4(_) | Hash(_) | WadHash(_) | Link(_)
-        | Color(_) | BitBool(_) => {}
+        | Color(_) | BitBool(_) | NativeLeaf(_) => {}
     }
 
     mutations

@@ -1,0 +1,30 @@
+﻿{
+  "version": "1.0.0",
+  "last_updated": "2026-09-14",
+  "enabled_fixes": ["custom_asset_types"],
+  "fixes": {
+    "custom_asset_types": {
+      "name": "Custom asset types",
+      "description": "Change only the selected class fields to native file references.",
+      "severity": "high",
+      "phase": "post_repath",
+      "detect": { "type": "always" },
+      "apply": {
+        "type": "edit",
+        "operations": [
+          {
+            "op": "convert",
+            "select": {
+              "targets": [
+                { "class": "SkinMeshDataProperties", "field": "texture" },
+                { "class": "StaticMaterialShaderSamplerDef", "field": "texturePath" }
+              ]
+            },
+            "from": "string",
+            "to": "file"
+          }
+        ]
+      }
+    }
+  }
+}

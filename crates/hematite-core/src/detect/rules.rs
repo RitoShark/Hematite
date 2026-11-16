@@ -33,6 +33,7 @@ pub fn detect_issue(rule: &DetectionRule, ctx: &FixContext) -> bool {
     let hashes = ctx.hashes;
     let wad = ctx.wad;
     match rule {
+        DetectionRule::Always => true,
         DetectionRule::MissingOrWrongField {
             entry_type,
             embed_path,

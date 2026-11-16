@@ -186,6 +186,9 @@ pub enum FixPhase {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DetectionRule {
+    /// The edit program itself determines whether any values would change.
+    #[serde(rename = "always")]
+    Always,
     /// Field is missing or has the wrong value in a specific embed path.
     #[serde(rename = "missing_or_wrong_field")]
     MissingOrWrongField {
@@ -271,6 +274,11 @@ pub enum DetectionRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TransformAction {
+    /// Ordered, atomic edits on native rs_bin values.
+    #[serde(rename = "edit")]
+    Edit {
+        operations: Vec<crate::edit::EditOperation>,
+    },
     /// Add or update a field value (optionally creating parent embeds).
     #[serde(rename = "ensure_field")]
     EnsureField {

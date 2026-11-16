@@ -79,6 +79,28 @@ pub fn apply_fixes_in_phase(
 
         let detected = detect_issue(&fix_rule.detect, ctx);
 
+        if let hematite_types::config::TransformAction::Edit { operations } = &fix_rule.apply {
+            if detected {
+                match crate::transform::edit::apply(&mut ctx.tree, operations, dry_run) {
+                    Ok(changes) if changes > 0 => {
+                        result.fixes_applied += 1;
+                        result.applied_fixes.push(AppliedFix {
+                            fix_id: fix_id.clone(),
+                            fix_name: fix_rule.name.clone(),
+                            changes_count: changes,
+                            file_path: ctx.file_path.clone(),
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        result.fixes_failed += 1;
+                        result.errors.push(format!("Fix '{fix_id}': {error:#}"));
+                    }
+                }
+            }
+            continue;
+        }
+
         if detected {
             if dry_run {
                 result.fixes_applied += 1;
@@ -120,6 +142,7 @@ pub fn apply_fixes_in_phase(
 /// Object-specific transforms (EnsureField, VfxShapeFix) need this to filter objects.
 fn extract_entry_type(rule: &DetectionRule) -> Option<&str> {
     match rule {
+        DetectionRule::Always => None,
         DetectionRule::MissingOrWrongField { entry_type, .. }
         | DetectionRule::FieldHashExists { entry_type, .. }
         | DetectionRule::StringExtensionNotInWad { entry_type, .. }

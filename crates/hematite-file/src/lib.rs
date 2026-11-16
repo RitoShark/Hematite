@@ -1,4 +1,4 @@
-//! File-format adapter — the ONLY crate that imports the RitoShark rs_* crates.
+//! File I/O adapters and providers for the RitoShark format crates.
 
 pub mod bin_adapter;
 pub mod convert;

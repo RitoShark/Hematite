@@ -6,6 +6,8 @@ workflow.
 
 For the user-facing intro see [README.md](README.md).
 
+For new BIN rules, start with [configurable edits](docs/configurable-edits.md): scoped selectors, ordered operations, typed JSON values, and `--config` usage. The tables below also document legacy actions for compatibility.
+
 ---
 
 ## Table of contents
@@ -33,17 +35,14 @@ For the user-facing intro see [README.md](README.md).
 
 ## Architecture
 
-5-crate Rust workspace. The fix engine **never imports the file-format
-crates** — when those crates change their API, only the adapter crate
-needs updating. (The adapter currently wraps the RitoShark `rs_*`
-crates, which the team owns; it previously wrapped `league-toolkit`.)
+Six-crate Rust workspace. Generic BIN edits use native `rs_bin` values; the shared bridge in `hematite-types` keeps legacy repair/repath algorithms compatible. File, WAD, and game access remain behind adapters.
 
 ```mermaid
 graph TD
     CLI[hematite-cli<br/><sub>args · logging · file routing · remote config · version gate · deep-repair · restore-anm · combo relocation</sub>]
     CORE[hematite-core<br/><sub>detection · transforms · walker · seeds · assets registry</sub>]
-    FILE[hematite-file<br/><sub>BIN/WAD/texture adapters · the only crate importing the rs_* format crates</sub>]
-    TYPES[hematite-types<br/><sub>pure data types · config schema · hash newtypes</sub>]
+    FILE[hematite-file<br/><sub>BIN/WAD/texture adapters</sub>]
+    TYPES[hematite-types<br/><sub>shared BIN bridge · config schema · hash newtypes</sub>]
     LIVE[hematite-live<br/><sub>League install detection · TOC-only WAD reader · GameIndex</sub>]
     LEAGUE[("RitoShark rs_* crates<br/>rs_bin · rs_wad · rs_tex · rs_mesh · rs_io")]
 
@@ -53,15 +52,17 @@ graph TD
     CORE --> TYPES
     FILE --> TYPES
     FILE --> LEAGUE
+    CORE --> LEAGUE
+    TYPES --> LEAGUE
 ```
 
 Crate purpose:
 
 | Crate | Responsibility |
 |---|---|
-| `hematite-types` | Pure data: `BinTree`, `FixConfig`, `RepathOptions`, hash newtypes. No deps on parsing libs. |
+| `hematite-types` | Pure data: `BinTree`, `FixConfig`, `RepathOptions`, hash newtypes. Includes the shared rs_bin bridge. |
 | `hematite-core` | Fix engine: detection rules, transform actions, BFS walker, fallback, repath, seed discovery, asset registry. Operates against trait abstractions. |
-| `hematite-file` | The **only** crate that touches the file-format crates (the RitoShark `rs_*` crates: `rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`). Provides `BinProvider`, `HashProvider`, `WadProvider` implementations, plus texture converters (DDS↔TEX, strip-mipmaps, fix-dimensions). |
+| `hematite-file` | File I/O adapters for the file-format crates (the RitoShark `rs_*` crates: `rs_bin`, `rs_wad`, `rs_tex`, `rs_mesh`, `rs_io`). Provides `BinProvider`, `HashProvider`, `WadProvider` implementations, plus texture converters (DDS↔TEX, strip-mipmaps, fix-dimensions). |
 | `hematite-cli` | Binary: CLI args, logging, file-type routing, remote config fetching, the version-gate, batch orchestration. Hosts the live-game glue: `LiveGameProvider` (implements `hematite-core`'s `GameProvider`), deep repair, restore-anm, combo-bin relocation. |
 | `hematite-live` | Standalone live-game access (no rs_*/hematite deps): League install auto-detection (Riot manifest → processes → common paths → registry), TOC-only WAD reader (never loads whole game WADs), per-chunk decompression, lazy multi-WAD `GameIndex`. |
 
