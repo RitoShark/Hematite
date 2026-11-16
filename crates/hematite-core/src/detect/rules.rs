@@ -19,7 +19,7 @@ use crate::factory::matches_json;
 use crate::filter;
 use crate::traits::{HashProvider, WadProvider};
 use crate::walk::extract_strings;
-use hematite_types::bin::{BinTree, PropertyValue, StructValue};
+use hematite_types::bin::{BinTree, PropertyValue};
 use hematite_types::config::{DetectionRule, EntryValidationTarget};
 use hematite_types::hash::FieldHash;
 
@@ -380,66 +380,12 @@ fn detect_entry_type_exists(
     false
 }
 
-fn detect_vfx_shape_needs_fix(tree: &BinTree, hashes: &dyn HashProvider, entry_type: &str) -> bool {
-    if !hashes.is_loaded() {
-        return false;
-    }
-
-    let Some(target_type_hash) = hashes.type_hash(entry_type) else {
-        return false;
-    };
-    let Some(shape_hash) = hashes.field_hash("Shape") else {
-        return false;
-    };
-
-    let old_shape_field_hashes: Vec<u32> = [
-        hashes.field_hash("BirthTranslation"),
-        hashes.field_hash("EmitOffset"),
-        hashes.field_hash("EmitRotationAngles"),
-        hashes.field_hash("EmitRotationAxes"),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|h| h.0)
-    .collect();
-
-    let objects = filter::objects_by_type(tree, target_type_hash);
-
-    for obj in objects {
-        for prop in obj.properties.values() {
-            if let PropertyValue::Container(items) | PropertyValue::UnorderedContainer(items) =
-                &prop.value
-            {
-                for item in items {
-                    let emitter = match item {
-                        PropertyValue::Embedded(e) | PropertyValue::Struct(e) => e,
-                        _ => continue,
-                    };
-
-                    if let Some(shape_prop) = emitter.properties.get(&shape_hash.0) {
-                        let shape = match &shape_prop.value {
-                            PropertyValue::Embedded(s) | PropertyValue::Struct(s) => s,
-                            _ => continue,
-                        };
-
-                        if has_old_vfx_shape_format(shape, &old_shape_field_hashes) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    false
-}
-
-/// Returns true if the shape struct contains any old-format fields that need migration.
-fn has_old_vfx_shape_format(shape: &StructValue, old_field_hashes: &[u32]) -> bool {
-    shape
-        .properties
-        .keys()
-        .any(|k| old_field_hashes.contains(k))
+fn detect_vfx_shape_needs_fix(
+    tree: &BinTree,
+    _hashes: &dyn HashProvider,
+    entry_type: &str,
+) -> bool {
+    crate::transform::vfx_shape::detect(tree, entry_type)
 }
 
 /// Detect invalid shader references in StaticMaterialDef/CustomShaderDef objects.
