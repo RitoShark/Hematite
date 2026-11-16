@@ -19,6 +19,7 @@ hematite-orchestrate = { path = "../hematite-orchestrate" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 
 # CLI framework
 clap = { version = "4.4", features = ["derive"] }

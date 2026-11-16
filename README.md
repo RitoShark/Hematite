@@ -70,7 +70,9 @@ Fix rules update from GitHub with a local fallback, so new rules can ship withou
 
 Accepts `.fantome`, `.modpkg`, mod `.zip` archives, `.wad.client` files or folders, and individual `.bin` files. Pass a folder to process the supported files inside it and its subfolders.
 
-Results go into `Hematite-Fixed` next to the input. For a batch folder, that directory sits inside it and keeps the same subfolder structure. Originals are left alone by default. WAD output is an unpacked `.wad.client` folder.
+Results go into numbered repair directories, for example `Hematite-Fixed/skin.fantome.hematite/r001/skin.fantome`. Later runs create `r002`, `r003`, and so on. Batch processing keeps the input subfolder structure. Originals and previous revisions remain intact. WAD output is an unpacked `.wad.client` folder.
+
+Each revision includes `hematite-repair.json`, recording the target League build when available, Hematite and rules versions, input/output fingerprints, applied fixes, and post-repair validation. Keep this file beside the repaired mod to retain its history. The author?s package version is preserved. See [repair revisions and validation](docs/repair-revisions.md).
 
 </details>
 
@@ -122,6 +124,7 @@ Open PowerShell in the folder containing `hematite-cli.exe`. Replace the example
 | Fix without reading your League install | `.\hematite-cli.exe "skin.fantome" --no-live` |
 | Recover missing animations from the game | `.\hematite-cli.exe "skin.fantome" --restore-anm` |
 | Get a check report as JSON | `.\hematite-cli.exe "skin.fantome" --check --json` |
+| Recompress supported Vorbis bank audio (lossy, opt-in) | `.\hematite-cli.exe "skin.fantome" --compress-audio` |
 | Show detailed logs | `.\hematite-cli.exe "skin.fantome" -v verbose` |
 | Check for updates | `.\hematite-cli.exe --check-version` |
 | Show every option | `.\hematite-cli.exe --help` |

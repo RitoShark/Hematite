@@ -8,7 +8,7 @@ license-file.workspace = true
 
 [dependencies]
 hematite-types = { workspace = true }
-rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "6b43a0d" }
+rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "32da36c" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

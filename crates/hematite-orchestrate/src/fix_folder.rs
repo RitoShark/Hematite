@@ -226,6 +226,7 @@ pub fn fix_folder(
 
     // Perform file format conversions
     let mut converter_registry = ConverterRegistry::new();
+    converter_registry.register("compress_audio", hematite_file::audio::compress_bank);
     converter_registry.register("dds_to_tex", texture_converter::dds_to_tex);
     converter_registry.register("sco_to_scb", mesh_converter::sco_to_scb);
     converter_registry.register(
@@ -293,6 +294,11 @@ pub fn fix_folder(
                             conversion.path,
                             e
                         );
+                        total_result.fixes_failed += 1;
+                        total_result.errors.push(format!(
+                            "{}: {}: {e}",
+                            conversion.path, conversion.converter
+                        ));
                     }
                 }
             }
@@ -320,6 +326,14 @@ pub fn fix_folder(
                             if !dry_run {
                                 *bytes = new_bytes;
                             }
+                            total_result
+                                .applied_fixes
+                                .push(hematite_types::result::AppliedFix {
+                                    fix_id: op.fix_id.clone(),
+                                    fix_name: op.fix_name.clone(),
+                                    changes_count: 1,
+                                    file_path: op.path.clone(),
+                                });
                             per_fix
                                 .entry(op.fix_id.clone())
                                 .or_insert_with(|| (op.fix_name.clone(), 0))
@@ -333,6 +347,10 @@ pub fn fix_folder(
                             op.path,
                             e
                         );
+                        total_result.fixes_failed += 1;
+                        total_result
+                            .errors
+                            .push(format!("{}: {}: {e}", op.path, op.converter));
                     }
                 }
             }

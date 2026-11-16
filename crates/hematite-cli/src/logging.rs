@@ -131,6 +131,20 @@ pub fn log_session_summary(result: &hematite_types::result::ProcessResult, durat
         result.fixes_failed.to_string().red()
     );
 
+    for repair in &result.repairs {
+        println!("Repair r{:03}: {}", repair.revision, repair.output);
+        println!(
+            "  Target League build: {}",
+            repair.target_game_build.as_deref().unwrap_or("unknown")
+        );
+        println!(
+            "  Validation: {} ({} issues, {} incomplete checks)",
+            repair.validation_status,
+            repair.validation.issues.len(),
+            repair.validation.limitations.len()
+        );
+    }
+
     if !result.errors.is_empty() {
         println!("\n{}:", "Errors".red().bold());
         for error in &result.errors {

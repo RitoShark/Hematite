@@ -17,6 +17,7 @@ pub struct ProcessResult {
     pub duration: Option<Duration>,
     /// Check-mode info (populated when --check is used).
     pub check_info: Option<CheckInfo>,
+    pub repairs: Vec<RepairRecord>,
     pub repath_reports: Vec<crate::repath::RepathReport>,
 }
 
@@ -39,6 +40,7 @@ impl ProcessResult {
         self.errors.extend(other.errors);
         self.applied_fixes.extend(other.applied_fixes);
         self.repath_reports.extend(other.repath_reports);
+        self.repairs.extend(other.repairs);
         // Merge check info (keep first non-None)
         if self.check_info.is_none() {
             self.check_info = other.check_info;
@@ -47,7 +49,7 @@ impl ProcessResult {
 }
 
 /// Record of a single fix that was successfully applied.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AppliedFix {
     /// Fix rule ID from config (e.g. "healthbar_fix").
     pub fix_id: String,
@@ -57,4 +59,48 @@ pub struct AppliedFix {
     pub changes_count: u32,
     /// File path where the fix was applied.
     pub file_path: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ValidationReport {
+    pub checks: Vec<String>,
+    pub bins_checked: u32,
+    pub banks_checked: u32,
+    pub references_checked: u32,
+    pub issues: Vec<String>,
+    pub limitations: Vec<String>,
+}
+
+impl ValidationReport {
+    pub fn status(&self) -> &'static str {
+        if !self.issues.is_empty() {
+            "has_unresolved_issues"
+        } else if !self.limitations.is_empty() {
+            "incomplete"
+        } else {
+            "passed_automated_checks"
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RepairRecord {
+    pub format_version: u32,
+    pub revision: u32,
+    pub parent_revision: Option<u32>,
+    pub input_sha256: String,
+    pub output_sha256: String,
+    pub output: String,
+    pub target_game_build: Option<String>,
+    pub source_game_build: Option<String>,
+    pub hematite_version: String,
+    pub rules_version: String,
+    pub rules_sha256: String,
+    pub selected_fixes: Vec<String>,
+    pub options: serde_json::Value,
+    pub applied_fixes: Vec<AppliedFix>,
+    pub errors: Vec<String>,
+    pub validation_status: String,
+    pub validation: ValidationReport,
+    pub in_game_tested: bool,
 }

@@ -61,3 +61,9 @@ fn packed_wad_and_fantome_binless_guards_preserve_input() {
     assert_eq!(std::fs::read(&archive_path).unwrap(), before);
     assert!(!ctx.out_dir.exists());
 }
+
+#[test]
+fn revision_roots_are_excluded_from_batch_discovery() {
+    assert!(is_own_output(Path::new("skin.fantome.hematite")));
+    assert!(!is_own_output(Path::new("skin.fantome")));
+}

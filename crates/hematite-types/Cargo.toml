@@ -11,4 +11,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 indexmap = { workspace = true }
 anyhow = { workspace = true }
-rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "6b43a0d" }
+rs_bin = { git = "https://github.com/RitoShark/RitoShark-Crates.git", rev = "32da36c" }

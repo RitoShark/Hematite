@@ -13,3 +13,6 @@ pub mod wad_builder;
 pub mod wad_folder;
 
 pub use rs_bin::{append_trailer, read_trailer, Trailer};
+
+pub mod audio;
+pub mod validation;

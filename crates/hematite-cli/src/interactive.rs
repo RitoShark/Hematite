@@ -281,6 +281,7 @@ fn baseline_cli(input: PathBuf) -> Cli {
         particles: false,
         remove_champion_bins: false,
         remove_bnk: false,
+        compress_audio: false,
         vfx_shape: false,
         remove_anm: false,
         fix_shaders: false,

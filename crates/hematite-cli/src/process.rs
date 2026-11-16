@@ -29,10 +29,14 @@ pub const OUTPUT_DIR_NAME: &str = "Hematite-Fixed";
 #[path = "process_tests.rs"]
 mod tests;
 
+#[path = "repair_revision.rs"]
+mod repair_revision;
+
 /// Session-level parameters shared by every file processing function.
 ///
 /// Bundles together the options that are constant for the entire run so that
 /// individual `process_*` functions stay within Clippy's argument-count limit.
+#[derive(Clone)]
 struct ProcessContext<'a> {
     config: &'a FixConfig,
     selected_fixes: &'a [String],
@@ -222,7 +226,7 @@ pub fn process_input(
 
     if input.is_dir() {
         if is_wad_folder(input) {
-            total_result = process_wad_folder(input, &ctx, &hash_provider)?;
+            total_result = repair_revision::process(input, &ctx, &hash_provider)?;
         } else {
             // Batch mode. One unreadable mod must not abandon the rest of the
             // folder, so failures are collected and reported at the end.
@@ -244,9 +248,9 @@ pub fn process_input(
 
                 let outcome = if is_wad_folder(&path) {
                     it.skip_current_dir();
-                    Some(process_wad_folder(&path, &ctx, &hash_provider))
+                    Some(repair_revision::process(&path, &ctx, &hash_provider))
                 } else if path.is_file() && is_supported_file(&path) {
-                    Some(process_file_with_hashes(&path, &ctx, &hash_provider))
+                    Some(repair_revision::process(&path, &ctx, &hash_provider))
                 } else {
                     None
                 };
@@ -265,7 +269,7 @@ pub fn process_input(
             }
         }
     } else {
-        total_result = process_file_with_hashes(input, &ctx, &hash_provider)?;
+        total_result = repair_revision::process(input, &ctx, &hash_provider)?;
     }
 
     ctx.ui.finish();
@@ -281,7 +285,9 @@ fn is_own_output(path: &Path) -> bool {
             let lower = n.to_lowercase();
             // `.fixed.` covers outputs from before results moved into their
             // own folder, which users still have lying around.
-            lower == OUTPUT_DIR_NAME.to_lowercase() || lower.contains(".fixed.")
+            lower == OUTPUT_DIR_NAME.to_lowercase()
+                || lower.ends_with(".hematite")
+                || lower.contains(".fixed.")
         })
         .unwrap_or(false)
 }
@@ -659,6 +665,7 @@ fn process_wad_file(
 
     // Perform file format conversions
     let mut converter_registry = ConverterRegistry::new();
+    converter_registry.register("compress_audio", hematite_file::audio::compress_bank);
     // Register rs_*-based converters (override placeholders)
     converter_registry.register("dds_to_tex", texture_converter::dds_to_tex);
     converter_registry.register("sco_to_scb", mesh_converter::sco_to_scb);
@@ -726,6 +733,11 @@ fn process_wad_file(
                             conversion.path,
                             e
                         );
+                        total_result.fixes_failed += 1;
+                        total_result.errors.push(format!(
+                            "{}: {}: {e}",
+                            conversion.path, conversion.converter
+                        ));
                     }
                 }
             }
@@ -755,6 +767,14 @@ fn process_wad_file(
                             if !dry_run {
                                 *bytes = new_bytes;
                             }
+                            total_result
+                                .applied_fixes
+                                .push(hematite_types::result::AppliedFix {
+                                    fix_id: op.fix_id.clone(),
+                                    fix_name: op.fix_name.clone(),
+                                    changes_count: 1,
+                                    file_path: op.path.clone(),
+                                });
                             per_fix
                                 .entry(op.fix_id.clone())
                                 .or_insert_with(|| (op.fix_name.clone(), 0))
@@ -774,6 +794,10 @@ fn process_wad_file(
                             op.path,
                             e
                         );
+                        total_result.fixes_failed += 1;
+                        total_result
+                            .errors
+                            .push(format!("{}: {}: {e}", op.path, op.converter));
                     }
                 }
             }

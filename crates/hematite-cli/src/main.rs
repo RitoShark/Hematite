@@ -213,11 +213,30 @@ pub fn run_with_cli(cli: Cli) -> Result<()> {
 
     let start_time = Instant::now();
 
-    let config = match &cli.config {
+    let mut config = match &cli.config {
         Some(path) => remote::load_local_fix_config(path)?,
         None => remote::load_fix_config(),
     };
     let mut selected_fixes = args::collect_selected_fixes(&cli, &config);
+    if cli.compress_audio {
+        let embedded: hematite_types::config::FixConfig =
+            toml::from_str(include_str!("../../../config/fix_config.toml"))?;
+        let mut enabled = config.default_fix_ids();
+        for id in ["compress_audio", "compress_audio_wpk"] {
+            config
+                .wad_fixes
+                .entry(id.into())
+                .or_insert_with(|| embedded.wad_fixes[id].clone());
+            if !enabled.iter().any(|rule| rule == id) {
+                enabled.push(id.into());
+            }
+            if !selected_fixes.iter().any(|rule| rule == id) {
+                selected_fixes.push(id.into());
+            }
+        }
+        config.enabled_fixes = Some(enabled);
+    }
+
     let champion_list = remote::load_champion_list();
     let champions = CharacterRelations::from_champion_list(&champion_list);
 
@@ -401,6 +420,7 @@ fn output_check_json(result: &hematite_types::result::ProcessResult) -> Result<(
     if let Some(check_info) = &result.check_info {
         let mut value = serde_json::to_value(check_info)?;
         value["repath_reports"] = serde_json::to_value(&result.repath_reports)?;
+        value["repairs"] = serde_json::to_value(&result.repairs)?;
         let json = serde_json::to_string_pretty(&value)?;
         println!("{}", json);
     } else {
@@ -419,16 +439,23 @@ fn output_json(result: &hematite_types::result::ProcessResult, duration: f64) ->
         errors: Vec<String>,
         duration_seconds: f64,
         repath_reports: Vec<hematite_types::repath::RepathReport>,
+        repairs: Vec<hematite_types::result::RepairRecord>,
     }
 
     let output = JsonOutput {
-        success: result.errors.is_empty(),
+        success: result.errors.is_empty()
+            && result.fixes_failed == 0
+            && result
+                .repairs
+                .iter()
+                .all(|r| r.validation.issues.is_empty()),
         files_processed: result.files_processed,
         fixes_applied: result.fixes_applied,
         fixes_failed: result.fixes_failed,
         errors: result.errors.clone(),
         duration_seconds: duration,
         repath_reports: result.repath_reports.clone(),
+        repairs: result.repairs.clone(),
     };
 
     let json = serde_json::to_string_pretty(&output)?;

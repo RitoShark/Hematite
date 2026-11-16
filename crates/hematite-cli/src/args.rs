@@ -23,7 +23,7 @@
 //! | `--json` | JSON output for automation |
 //! | `--dry-run` | Show what would be fixed, don't modify |
 //! | `-v <level>` | Verbosity: quiet, normal, verbose, trace |
-//! | `-o <path>` | Output path (default: overwrite input) |
+//! | `-o <path>` | Output directory (default: Hematite-Fixed beside the input) |
 
 use clap::Parser;
 use std::path::PathBuf;
@@ -37,7 +37,7 @@ pub struct Cli {
     #[arg(required_unless_present = "check_version")]
     pub input: Option<PathBuf>,
 
-    /// Output path (default: overwrite input)
+    /// Output directory (default: Hematite-Fixed beside the input)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
@@ -63,6 +63,12 @@ pub struct Cli {
 
     #[arg(long, help = "Remove incompatible BNK audio files")]
     pub remove_bnk: bool,
+
+    #[arg(
+        long,
+        help = "Opt in to lossy Vorbis bank recompression; keep original codecs and bank metadata"
+    )]
+    pub compress_audio: bool,
 
     #[arg(long, help = "Fix VFX shape format (14.1+ migration)")]
     pub vfx_shape: bool,

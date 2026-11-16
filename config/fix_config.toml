@@ -849,3 +849,29 @@ type = "rename_file"
 pattern = "^$"
 replacement = ""
 
+
+[wad_fixes.compress_audio]
+name = "Compress bank audio (lossy, opt-in)"
+description = "Re-encodes plain Vorbis WEMs at quality 0.4 only when smaller; preserves PCM, loop/extra-chunk streams, bank IDs and hierarchy."
+severity = "low"
+
+[wad_fixes.compress_audio.detect]
+type = "file_extension"
+extension = ".bnk"
+
+[wad_fixes.compress_audio.apply]
+type = "transform_bytes"
+converter = "compress_audio"
+
+[wad_fixes.compress_audio_wpk]
+name = "Compress package audio (lossy, opt-in)"
+description = "Same codec-preserving Vorbis recompression as compress_audio, for WPK containers."
+severity = "low"
+
+[wad_fixes.compress_audio_wpk.detect]
+type = "file_extension"
+extension = ".wpk"
+
+[wad_fixes.compress_audio_wpk.apply]
+type = "transform_bytes"
+converter = "compress_audio"
